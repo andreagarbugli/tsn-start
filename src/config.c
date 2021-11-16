@@ -112,6 +112,38 @@ int load_config(const char *filename, struct config *cfg) {
                     }
                 }
 
+                if (strncmp(name, "ENABLE_TXTIME", strnlen(name, BUFSIZE)) == 0) {
+                    if (strncmp(value, "TRUE", strnlen(value, BUFSIZE)) == 0) {
+                        cfg->enable_txtime = true;
+                    }
+                }
+
+                if (strncmp(name, "PACKET_SIZE", strnlen(name, BUFSIZE)) == 0) {
+                    int val = strtol(value, &endptr, 10);
+                    if (errno || endptr != value) {
+                        cfg->packet_size = val;
+                    }
+                }
+
+                if (strncmp(name, "VLAN", strnlen(name, BUFSIZE)) == 0) {
+                    int val = strtol(value, &endptr, 10);
+                    if (errno || endptr != value) {
+                        cfg->vlan = val;
+                    }
+                }
+
+                if (strncmp(name, "DEADLINE_MODE", strnlen(name, BUFSIZE)) == 0) {
+                    if (strncmp(value, "TRUE", strnlen(value, BUFSIZE)) == 0) {
+                        cfg->use_deadline_mode = true;
+                    }
+                }
+
+                if (strncmp(name, "RECEIVE_ERRORS", strnlen(name, BUFSIZE)) == 0) {
+                    if (strncmp(value, "TRUE", strnlen(value, BUFSIZE)) == 0) {
+                        cfg->receive_errors = true;
+                    }
+                }
+
                 if (strncmp(name, "IFACE", strnlen(name, BUFSIZE)) == 0) {
                     strncpy(cfg->iface, value, sizeof(cfg->iface));
                 }
@@ -134,12 +166,21 @@ int load_config(const char *filename, struct config *cfg) {
     }
 }
 
-int get_config_string(struct config *cfg, char *buf) {
+int get_config_string(struct config *cfg, char *buf, int size) {
     snprintf(
-        buf, 1024, "cfg { iface: %s, dst_mac_addr: %hhx:%hhx:%hhx:%hhx:%hhx:%hhx }",
+        buf, size, 
+        "\ncfg {\n" 
+        "\tiface: %s,\n"
+        "\tdst_mac_addr: %hhx:%hhx:%hhx:%hhx:%hhx:%hhx,\n"
+        "\tenable_txtime: %s,\n"
+        "\tmode: %s,\n"
+        "\treceive_errors: %s\n}",
         cfg->iface,
         cfg->dst_mac_addr[0], cfg->dst_mac_addr[1], cfg->dst_mac_addr[2],
-        cfg->dst_mac_addr[3], cfg->dst_mac_addr[4], cfg->dst_mac_addr[5]
+        cfg->dst_mac_addr[3], cfg->dst_mac_addr[4], cfg->dst_mac_addr[5],
+        cfg->enable_txtime ? "true" : "false",
+        cfg->use_deadline_mode ? "deadline" : "strict",
+        cfg->receive_errors ? "true" : "false"
     );
     
     return 0;
