@@ -144,6 +144,19 @@ int load_config(const char *filename, struct config *cfg) {
                     }
                 }
 
+                if (strncmp(name, "RAW_SOCKET", strnlen(name, BUFSIZE)) == 0) {
+                    if (strncmp(value, "TRUE", strnlen(value, BUFSIZE)) == 0) {
+                        cfg->receive_errors = true;
+                    }
+                }
+
+                if (strncmp(name, "OFFSET", strnlen(name, BUFSIZE)) == 0) {
+                    int val = strtol(value, &endptr, 10);
+                    if (errno || endptr != value) {
+                        cfg->offset = val;
+                    }
+                }
+
                 if (strncmp(name, "PERIOD", strnlen(name, BUFSIZE)) == 0) {
                     int val = strtol(value, &endptr, 10);
                     if (errno || endptr != value) {

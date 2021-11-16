@@ -90,8 +90,6 @@ static uint64_t get_timestamp(struct msghdr *msg) {
 }
 
 static u64 extract_ts_from_cmsg(int sock, int recvmsg_flags) {
-
-
 	u8 data[256];
 	struct iovec entry;
 	entry.iov_base = data;
@@ -117,6 +115,24 @@ static u64 extract_ts_from_cmsg(int sock, int recvmsg_flags) {
 
 	return get_timestamp(&msg);
 }
+
+static void normalize_timespec(struct timespec *ts) {
+    while (ts->tv_nsec > 999999999) {
+		ts->tv_sec += 1;
+		ts->tv_nsec -= NSEC_PER_SEC;
+	}
+
+	while (ts->tv_nsec < 0) {
+		ts->tv_sec -= 1;
+		ts->tv_nsec += NSEC_PER_SEC;
+	}
+}
+
+static u64 normalize_timestamp_ns(i64 ts, i64 base) {
+    u64 tmp = ts / base;
+    return tmp * base;
+}
+
 
 int main(int argc, char *argv[]) {
     int ret = 0;
@@ -256,9 +272,143 @@ int main(int argc, char *argv[]) {
         }
 
     } else {
-        LOG_TRACE("TODO(garbu): handle ETF mode");
-    }
+        /* build the packet to be sent */
+        u16 vlan_tci = cfg.sk_prio << 13;
+        vlan_tci |= cfg.vlan & 0x1fff;
 
+        struct tsn_packet tsnpkt = { 0 };
+        memcpy(&tsnpkt.dst_mac, cfg.dst_mac_addr, sizeof(tsnpkt.src_mac));
+        memcpy(&tsnpkt.src_mac, src_mac_addr, sizeof(tsnpkt.src_mac));
+        tsnpkt.vlan_hdr = htons(ETHERTYPE_VLAN);
+        tsnpkt.vlan_tci = htobe16(vlan_tci);
+        tsnpkt.eth_hdr = htons(ETH_P_TSN);
+        tsnpkt.payload = payload;
+
+        u8* payload_ptr = (u8 *)&tsnpkt.payload;
+        struct custom_payload *payload = (struct custom_payload *)payload_ptr; 
+
+        // u8* offset = (u8 *)&tsnpkt.vlan_prio;
+
+        memcpy(&payload->tx_queue, &cfg.sk_prio, sizeof(u32));
+
+        int iface_index = if_nametoindex(cfg.iface);
+        if (iface_index == 0) {
+            LOG_ERROR("No index found for interface %s: %s", strerror(errno));
+            goto clean;
+        }
+
+        LOG_TRACE("Interface '%s' has index: %d", cfg.iface, iface_index);
+
+        struct sockaddr_ll sk_addr = { 
+            .sll_family = AF_PACKET,
+            .sll_protocol = htons(ETH_P_8021Q),
+            .sll_halen = ETH_ALEN,
+            .sll_ifindex = iface_index,
+        };
+
+        memcpy(&sk_addr.sll_addr, cfg.dst_mac_addr, ETH_ALEN);
+
+        /* time interval setup */
+        struct timespec ts;
+        u64 looping_ts = get_realtime_ns() + NSEC_PER_SEC;
+        looping_ts = normalize_timestamp_ns(looping_ts, cfg.period);
+
+        ts.tv_sec = (looping_ts / NSEC_PER_SEC);
+        ts.tv_nsec = looping_ts % NSEC_PER_SEC;
+        normalize_timespec(&ts);
+
+        u64 txtime = looping_ts + cfg.offset;
+
+        /* setup the msghdr used in the sendmsg */
+        struct iovec iov;
+        size_t packet_size; 
+        void *offset = NULL;
+        if (cfg.raw_socket) {
+            iov.iov_base = (void*)&tsnpkt;
+            iov.iov_len = cfg.packet_size + 14;
+            // packet_size = cfg.packet_size + 14;
+            // offset = (void*)&tsnpkt;
+        } else {
+            iov.iov_base = (void*)&tsnpkt.vlan_tci;
+            iov.iov_len = cfg.packet_size;
+            // packet_size = cfg.packet_size - 14;
+            // offset = (void*)&tsnpkt.eth_hdr;
+        }
+
+        u8 control[CMSG_SPACE(sizeof(u64))] = { 0 };
+        struct msghdr msg;
+        memset(&msg, 0, sizeof(msg));
+        msg.msg_name = (void*)&sk_addr;
+        msg.msg_namelen = sizeof(struct sockaddr_ll);
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = control;
+        msg.msg_controllen = sizeof(control);
+
+        struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type = SCM_TXTIME;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(u64));
+        
+        u32 seq = 1;
+        u64 current_time = 0;
+        while (g_running) {
+            ret = clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &ts, NULL);
+            if (ret) {
+                LOG_ERROR("Failed to sleep %d: %s", ret, strerror(ret));
+                break;
+            }    
+
+            payload->seq = seq;
+            current_time = get_realtime_ns();
+            payload->tx_timestamp = current_time;
+
+            *((u64*)CMSG_DATA(cmsg)) = txtime;
+
+            LOG_TRACE("Send packet %d: %lld == %lld", seq, current_time, txtime);
+            i32 ret = sendmsg(sock, &msg, 0);
+            if (ret < 0) {
+                LOG_ERROR("sendmsg failed: %s", strerror(errno));
+            }
+
+            looping_ts += cfg.period;
+            ts.tv_sec = looping_ts / NSEC_PER_SEC;
+            ts.tv_nsec = looping_ts % NSEC_PER_SEC;
+
+            txtime += cfg.period;
+
+            int res = 0;
+            fd_set readfs, errorfs;
+            #if 0
+            if (cfg.hwstamp_enabled) {
+                struct timeval timeout;
+                timeout.tv_usec = 200;
+                FD_ZERO(&readfs);
+                FD_ZERO(&errorfs);
+                FD_SET(sock, &readfs);
+                FD_SET(sock, &errorfs);
+                
+                res = select(sock + 1, &readfs, 0, &errorfs, &timeout);
+            } else {
+                res = 0;
+            }
+
+            if (res > 0) {   
+                if (FD_ISSET(sock, &errorfs)) {
+                    u64 tx_timestamp2 = extract_ts_from_cmsg(sock, MSG_ERRQUEUE);
+
+                    LOG_DEBUG("txtstamp: %u\t%lu\t%lu",
+                        seq - 1, txtime, tx_timestamp2);
+                }
+            } else {
+                // TODO(garbu): handle timeout or hwtstamp no supported?!?  
+            }
+            #endif
+
+
+            seq += 1;
+        }
+    }
 
 clean:
     LOG_DEBUG("cleaning stuff");
@@ -272,7 +422,8 @@ exit_error:
 
 int open_socket(struct config *cfg) {
     // init the socket in AF_PACKET mode
-    int sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_8021Q));
+    int sock_type = cfg->raw_socket ? SOCK_RAW : SOCK_DGRAM;
+    int sock = socket(AF_PACKET, sock_type, htons(ETH_P_8021Q));
     if (sock < 0) {
         LOG_ERROR("Failed to create socket: %s", strerror(errno));
         return -1;

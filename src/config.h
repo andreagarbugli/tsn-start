@@ -15,6 +15,8 @@ struct config {
     i32 packet_size;
     i32 vlan;
     u64 period;
+    u64 offset;
+    bool raw_socket;
     bool hwstamp_enabled;
 };
 
