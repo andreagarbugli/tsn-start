@@ -14,6 +14,8 @@ struct config {
     bool enable_txtime;
     i32 packet_size;
     i32 vlan;
+    u64 period;
+    bool hwstamp_enabled;
 };
 
 int load_config(const char *filename, struct config *cfg);

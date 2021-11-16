@@ -144,6 +144,13 @@ int load_config(const char *filename, struct config *cfg) {
                     }
                 }
 
+                if (strncmp(name, "PERIOD", strnlen(name, BUFSIZE)) == 0) {
+                    int val = strtol(value, &endptr, 10);
+                    if (errno || endptr != value) {
+                        cfg->period = val;
+                    }
+                }
+
                 if (strncmp(name, "IFACE", strnlen(name, BUFSIZE)) == 0) {
                     strncpy(cfg->iface, value, sizeof(cfg->iface));
                 }
