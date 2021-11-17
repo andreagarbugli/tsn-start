@@ -11,4 +11,7 @@
  */
 i32 open_connection(struct config *cfg);
 
+i32 connection_send_message(i32 sock, void *buf, size_t buffsize, 
+    u64 txtime, struct sockaddr_ll *sk_addr);
+
 #endif // CONNECTION_H

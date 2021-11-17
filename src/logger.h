@@ -12,10 +12,6 @@
 #define ASCII_GREEN "\x1b[32m"
 #define ASCII_NONE "\x1b[0m"
 
-static void do_log(const char *fmt, const char* level, const char *color, va_list *ap);
-
-static void do_vlog(const char *fmt, const char* level, const char *color, va_list *ap);
-
 void log_error(const char *fmt, ...);
 
 void log_warn(const char *fmt, ...);

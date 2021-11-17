@@ -16,8 +16,8 @@
 bool is_valid_character(const char value) {
     return (value >= 'a' && value <= 'z') 
             || (value >= 'A' && value <= 'Z')
-            || (value >= '0' && value <= '9'
-            || value == '_');
+            || (value >= '0' && value <= '9')
+            || value == '_';
 }
 
 bool is_empty_line(const char *line, int len) {
@@ -208,12 +208,14 @@ int get_config_string(struct config *cfg, char *buf, int size) {
         "\tdst_mac_addr: %hhx:%hhx:%hhx:%hhx:%hhx:%hhx,\n"
         "\tenable_txtime: %s,\n"
         "\tmode: %s,\n"
+        "\tperiod: %ld,\n"
         "\treceive_errors: %s\n}",
         cfg->iface,
         cfg->dst_mac_addr[0], cfg->dst_mac_addr[1], cfg->dst_mac_addr[2],
         cfg->dst_mac_addr[3], cfg->dst_mac_addr[4], cfg->dst_mac_addr[5],
         cfg->enable_txtime ? "true" : "false",
         cfg->use_deadline_mode ? "deadline" : "strict",
+        cfg->period,
         cfg->receive_errors ? "true" : "false"
     );
     

@@ -5,6 +5,7 @@
 
 #include <linux/ethtool.h>
 #include <linux/if_ether.h>
+#include <linux/if_packet.h> /* sockaddr_ll */
 #include <linux/net_tstamp.h>
 #include <linux/sockios.h>
 
@@ -94,4 +95,38 @@ i32 open_connection(struct config *cfg) {
 clean:
     close(sock);
     return -1;
+}
+
+i32 connection_send_message(
+    i32 sock, void *buf, size_t buffsize, 
+    u64 txtime, struct sockaddr_ll *sk_addr
+) {   
+    struct iovec iov;
+    iov.iov_base = (void*)buf;
+    iov.iov_len = buffsize;
+
+    u8 control[CMSG_SPACE(sizeof(u64))] = { 0 };
+
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_name = (void*)sk_addr;
+    msg.msg_namelen = sizeof(struct sockaddr_ll);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+
+    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_TXTIME;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(u64));    
+    *((u64*)CMSG_DATA(cmsg)) = txtime;
+
+    i32 ret = sendmsg(sock, &msg, 0);
+    if (ret < 0) {
+        LOG_ERROR("sendmsg failed: %s", strerror(errno));
+        return -1;
+    }
+
+    return 0;
 }
