@@ -18,6 +18,9 @@ struct config {
     u64 offset;
     bool raw_socket;
     bool hwstamp_enabled;
+    
+    i8 priority;
+    i8 cpu;
 };
 
 int load_config(const char *filename, struct config *cfg);

@@ -4,7 +4,8 @@ target("tsnstart")
     set_kind("binary")
     add_defines("LOG_LEVEL=500")
     add_files("src/*.c")
-    -- add_includedirs("./include")
+    add_syslinks("pthread") -- add_syslinks("pthread", "dl", "m", "c")
+     -- add_includedirs("./include")
     if is_mode("debug") then
         add_defines("DEBUG")
     end
