@@ -1,13 +1,13 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include <net/if.h>
+#include <linux/if_ether.h>
 
 #include "common.h"
 
 struct config {
     char iface[100];
-    char dst_mac_addr[IFHWADDRLEN];
+    char dst_mac_addr[ETH_ALEN];
     i32 sk_prio;
     bool use_deadline_mode;
     bool receive_errors;
@@ -19,6 +19,7 @@ struct config {
     bool raw_socket;
     bool hwstamp_enabled;
     
+    bool realtime;
     i8 priority;
     i8 cpu;
 };

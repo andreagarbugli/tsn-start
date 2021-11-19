@@ -54,7 +54,7 @@ void vlog_trace(char *fmt, va_list ap);
 #if LOG_LEVEL >= 500
 #undef LOG_TRACE
 #define LOG_TRACE(fmt, ...) log_trace(fmt, ##__VA_ARGS__)
-#undef VLOG_TRACE(fmt, ap)
+#undef VLOG_TRACE
 #define VLOG_TRACE(fmt, ap) vlog_trace(fmt, ap)
 #endif
 

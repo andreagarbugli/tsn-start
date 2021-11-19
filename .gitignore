@@ -55,3 +55,4 @@ bin
 .vscode
 build
 .xmake
+out

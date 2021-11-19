@@ -9,6 +9,8 @@ u64 get_realtime_ns();
 
 void normalize_timespec(struct timespec *ts);
 
+u64 timespec_to_ns(struct timespec *ts);
+
 u64 normalize_timestamp_ns(i64 ts, i64 base);
 
 void setup_looping_ts_and_txtime(struct timespec *ts, u64 *looping_ts,

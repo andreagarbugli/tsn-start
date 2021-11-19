@@ -13,8 +13,8 @@ struct __attribute__((packed)) tsn_packet {
     u16 vlan_tci;
     // Header
     u16 eth_hdr;
-    // Payload 
-    void *payload;
+    // Payload
+    u8 *payload;
 };
 
 struct custom_payload {
@@ -25,7 +25,6 @@ struct custom_payload {
 };
 
 
-void setup_tsn_packet(struct tsn_packet *tsnpkt, void *payload,
-    u8 *src_mac_addr, struct config *cfg);
+u8** setup_tsn_packet(u8 *buf, u8 *src_mac_addr, struct config *cfg, size_t *packet_size);
 
 #endif // PACKET_H

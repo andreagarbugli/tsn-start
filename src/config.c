@@ -160,7 +160,13 @@ int load_config(const char *filename, struct config *cfg) {
 
                 if (strncmp(name, "RAW_SOCKET", strnlen(name, BUFSIZE)) == 0) {
                     if (strncmp(value, "TRUE", strnlen(value, BUFSIZE)) == 0) {
-                        cfg->receive_errors = true;
+                        cfg->raw_socket = true;
+                    }
+                }
+
+                if (strncmp(name, "REALTIME", strnlen(name, BUFSIZE)) == 0) {
+                    if (strncmp(value, "TRUE", strnlen(value, BUFSIZE)) == 0) {
+                        cfg->realtime = true;
                     }
                 }
 
@@ -198,6 +204,8 @@ int load_config(const char *filename, struct config *cfg) {
     if (close(config_file) < 0) {
         LOG_ERROR("failed to close config file: %s", strerror(errno));
     }
+
+    return 0;
 }
 
 int get_config_string(struct config *cfg, char *buf, int size) {
@@ -207,14 +215,14 @@ int get_config_string(struct config *cfg, char *buf, int size) {
         "\tiface: %s,\n"
         "\tdst_mac_addr: %hhx:%hhx:%hhx:%hhx:%hhx:%hhx,\n"
         "\tenable_txtime: %s,\n"
-        "\tmode: %s,\n"
+        "\raw_socket: %s,\n"
         "\tperiod: %ld,\n"
         "\treceive_errors: %s\n}",
         cfg->iface,
         cfg->dst_mac_addr[0], cfg->dst_mac_addr[1], cfg->dst_mac_addr[2],
         cfg->dst_mac_addr[3], cfg->dst_mac_addr[4], cfg->dst_mac_addr[5],
         cfg->enable_txtime ? "true" : "false",
-        cfg->use_deadline_mode ? "deadline" : "strict",
+        cfg->raw_socket ? "true" : "false",
         cfg->period,
         cfg->receive_errors ? "true" : "false"
     );

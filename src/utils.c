@@ -12,6 +12,9 @@ u64 get_realtime_ns() {
     return ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec;
 }
 
+__always_inline u64 timespec_to_ns(struct timespec *ts) {
+    return ts->tv_sec * NSEC_PER_SEC + ts->tv_nsec;
+}
 
 void normalize_timespec(struct timespec *ts) {
     while (ts->tv_nsec > 999999999) {
