@@ -84,7 +84,7 @@ int load_config(const char *filename, struct config *cfg) {
     char line[BUFSIZE] = { 0 };
     int line_idx = 0;
     
-    char buf[BUFSIZE];
+    char buf[BUFSIZE] = {0};
     ssize_t bytes_read = 0; 
     while ((bytes_read = read(config_file, buf, BUFSIZE)) > 0) {
         int buf_idx = 0;
@@ -188,6 +188,10 @@ int load_config(const char *filename, struct config *cfg) {
                     strncpy(cfg->iface, value, sizeof(cfg->iface));
                 }
 
+                if (strncmp(name, "BPF_PROG", strnlen(name, BUFSIZE)) == 0) {
+                    strncpy(cfg->bpf_prog, value, sizeof(cfg->bpf_prog));
+                }
+
                 if (strncmp(name, "DST_MAC_ADDR", strnlen(name, BUFSIZE)) == 0) {
                     sscanf(value, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
                         &cfg->dst_mac_addr[0], &cfg->dst_mac_addr[1], &cfg->dst_mac_addr[2],
@@ -215,7 +219,7 @@ int get_config_string(struct config *cfg, char *buf, int size) {
         "\tiface: %s,\n"
         "\tdst_mac_addr: %hhx:%hhx:%hhx:%hhx:%hhx:%hhx,\n"
         "\tenable_txtime: %s,\n"
-        "\raw_socket: %s,\n"
+        "\traw_socket: %s,\n"
         "\tperiod: %ld,\n"
         "\treceive_errors: %s\n}",
         cfg->iface,

@@ -1,80 +1,40 @@
 project(tsnstart)
 cmake_minimum_required(VERSION 3.15)
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/out")
 
 set(LOG_LEVEL "100" CACHE STRING "Set the level of the logger")
 
-add_executable(talker talker.c)
+add_library(tsn src/tsn.c)
 
-target_sources(talker
-    PRIVATE
-        src/common.h    
-        src/config.c
-        src/config.h
-        src/connection.c
-        src/connection.h
-        src/interface.c
-        src/interface.h
-        src/logger.c
-        src/logger.h
-        src/packet.c
-        src/packet.h
-        src/utils.c
-        src/utils.h
-)
+add_subdirectory(src)
 
-target_compile_definitions(talker
-    PRIVATE
-        LOG_LEVEL=${LOG_LEVEL}
-)
-
-
-target_compile_options(talker
-    PUBLIC
-        "-Wall" "-Wextra"
-)
-
-target_include_directories(talker
+target_include_directories(tsn
     PUBLIC
         "src"
+        "src/commands"
+        "out"
     )
 
+add_executable(talker talker.c)
+target_link_libraries(talker PRIVATE tsn bpf)
+target_compile_definitions(talker PRIVATE LOG_LEVEL=${LOG_LEVEL})
+target_compile_options(talker PUBLIC "-Wall" "-Wextra")
+
 add_executable(listener listener.c)
+target_link_libraries(listener PRIVATE tsn)
+target_compile_definitions(listener PRIVATE LOG_LEVEL=${LOG_LEVEL})
+target_compile_options(listener PUBLIC "-Wall" "-Wextra")
 
-
-target_sources(listener
-    PRIVATE
-        src/common.h    
-        src/config.c
-        src/config.h
-        src/connection.c
-        src/connection.h
-        src/interface.c
-        src/interface.h
-        src/logger.c
-        src/logger.h
-        src/packet.c
-        src/packet.h
-        src/utils.c
-        src/utils.h
+add_executable(talker-xdp talker_xdp.c)
+target_include_directories(talker-xdp
+    PUBLIC 
+        "out"
 )
 
-target_compile_definitions(listener
-    PRIVATE
-        LOG_LEVEL=${LOG_LEVEL}
-)
-
-
-target_compile_options(listener
-    PUBLIC
-        "-Wall" "-Wextra"
-)
-
-target_include_directories(listener
-    PUBLIC
-        "src"
-    )    
+target_link_libraries(talker-xdp PRIVATE tsn libbpf)
+target_compile_definitions(talker-xdp PRIVATE LOG_LEVEL=${LOG_LEVEL})
+target_compile_options(talker-xdp PUBLIC "-Wall" "-Wextra")
 
 add_custom_command(
     TARGET talker  POST_BUILD

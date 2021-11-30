@@ -1,0 +1,9 @@
+target_sources(tsn
+    PRIVATE
+        commands.c
+        ethtools.c
+        iface_cmd.c
+        xdp_cmd.c
+    PUBLIC
+        commands.h
+ )

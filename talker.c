@@ -13,6 +13,12 @@
 #include <linux/net_tstamp.h> /* timestamping define */
 #include <sys/socket.h>
 
+// BPF stuff
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h>
+#include <linux/if_link.h>
+
+#include "talker.skel.h"
 #include "common.h"
 #include "config.h"
 #include "connection.h"
@@ -31,6 +37,67 @@ void closing_handler(int signum) {
     
     g_running = false;
 }
+
+int load_bpf_object_file__simple(const char *filename) {
+    i32 first_prog_fd = -1;
+    struct bpf_object *obj = NULL;
+
+    i32 err = bpf_prog_load(filename,BPF_PROG_TYPE_XDP, &obj, &first_prog_fd);
+    if (err) {
+        LOG_ERROR("Failed to load BPF-OBJ file %s: %s", filename, strerror(err));
+    }
+
+    return first_prog_fd;
+}
+
+i32 xdp_link_detach(i32 ifindex, u32 xdp_flags) {
+	i32 err;
+	if ((err = bpf_set_link_xdp_fd(ifindex, -1, xdp_flags)) < 0) {
+		LOG_ERROR("Failed to unload BPF-PROG from interface %d: %s", ifindex, 
+				strerror(errno));
+		return -1;
+	}
+
+	return 0;
+}
+
+i32 xdp_link_attach(i32 ifindex, u32 xdp_flags, i32 prog_fd) {
+	i32 err = bpf_set_link_xdp_fd(ifindex, prog_fd, xdp_flags);
+	if (err == -EEXIST && !(xdp_flags & XDP_FLAGS_UPDATE_IF_NOEXIST)) {
+		u32 old_flags = xdp_flags;
+		xdp_flags &= ~XDP_FLAGS_MODES;
+		xdp_flags |= (old_flags & XDP_FLAGS_SKB_MODE) 
+				? XDP_FLAGS_DRV_MODE
+				: XDP_FLAGS_SKB_MODE;
+		
+		err = bpf_set_link_xdp_fd(ifindex, prog_fd, old_flags);
+		if (!err) {
+			err = bpf_set_link_xdp_fd(ifindex, prog_fd, old_flags);
+		}
+	}
+
+	if (err < 0) {
+		LOG_ERROR("Failed to load BPF-PROG in interface %d: %s", ifindex,
+				strerror(errno));
+
+		switch (-err) {
+			case EBUSY:
+			case EEXIST:
+				LOG_DEBUG("\t>hint: XDP already loaded on device");
+				break;
+			case EOPNOTSUPP:
+				LOG_DEBUG("\t>hint: Native-XDP not supported");
+				break;
+			default:
+				break;
+		}
+
+		return -1;
+	}
+
+	return 0;
+}
+
 
 int main(int argc, char *argv[]) {
     (void)argc;
@@ -61,11 +128,11 @@ int main(int argc, char *argv[]) {
     }
 
     u8 src_mac_addr[6];
-    interface_get_mac(sock, cfg.iface, src_mac_addr);
+    interface__get_mac(sock, cfg.iface, src_mac_addr);
 
-    int iface_index = interface_get_index(sock, cfg.iface);
+    int iface_index = interface__get_index(sock, cfg.iface);
     
-    LOG_TRACE("Interface '%s' has index: %d", cfg.iface, iface_index);
+	LOG_TRACE("Interface '%s' has index: %d", cfg.iface, iface_index);
 
     struct sockaddr_ll sk_addr = {0};
     sk_addr.sll_family = AF_PACKET,
@@ -87,6 +154,12 @@ int main(int argc, char *argv[]) {
 
 
     u8 msg_buf[1500];
+
+	i32 prog_fd = load_bpf_object_file__simple(cfg.bpf_prog);
+	if (prog_fd <= 0) {
+		LOG_ERROR("Failed to load BPF-OBJ file");
+		return -1;
+	}
 
     // Choose the sending semantic
     if (!cfg.enable_txtime) {

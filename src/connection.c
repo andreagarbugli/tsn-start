@@ -272,7 +272,7 @@ i32 open_listener(struct config *cfg) {
         return -1;
     }
 
-    i32 iface_index = interface_get_index(sock, cfg->iface);
+    i32 iface_index = interface__get_index(sock, cfg->iface);
 
     // TODO(garbu): move this config somewhere.
     i32 recvbuf_size = 1500 * 10000;
@@ -336,7 +336,7 @@ i32 open_listener(struct config *cfg) {
         return -1;
     }
 
-    interface_enable_hwtstamp(sock, cfg->iface);
+    interface__enable_hwtstamp(sock, cfg->iface);
     
     return sock;
 }

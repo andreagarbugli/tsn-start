@@ -22,6 +22,9 @@ struct config {
     bool realtime;
     i8 priority;
     i8 cpu;
+
+	// BPF 
+	char bpf_prog[100];
 };
 
 int load_config(const char *filename, struct config *cfg);

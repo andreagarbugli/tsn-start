@@ -1,0 +1,25 @@
+target_sources(tsn
+    PRIVATE
+        config.c
+        connection.c
+        interface.c
+        logger.c
+        packet.c
+        state.c
+        utils.c
+        xdp_common.c
+        xsk_common.c
+    PUBLIC
+        common.h
+        config.h
+        connection.h
+        interface.h
+        logger.h
+        packet.h
+        state.h
+        utils.h
+        xdp_common.h
+        xsk_common.h
+)
+
+add_subdirectory(commands)

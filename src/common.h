@@ -22,4 +22,12 @@ typedef double f64;
 
 typedef int32_t b32;
 
+#ifndef MAX
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
+
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(x) ((sizeof x) / (sizeof x[0]))
+#endif
+
 #endif // COMMON_H
