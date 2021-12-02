@@ -39,6 +39,8 @@ typedef struct xsk_socket_info {
     struct xsk_ring_cons cq;
     struct xsk_ring_prod fq;
 
+	u32 bpf_prog_id;
+
     u32 outstanding_tx;
     i32 queue_id;
 

@@ -101,10 +101,11 @@ void rtnl_read_newlink(struct nlmsghdr *h, struct interfaces *ifs) {
 		struct rtattr *rta = IFLA_RTA(ifm);
 		RTA_OK(rta, len);
 		rta = RTA_NEXT(rta, len)
-	) {
+	) {	
+		char *name = NULL;
 		switch (rta->rta_type) {
 			case IFLA_IFNAME:
-				char *name = (char *)RTA_DATA(rta);
+				name = (char *)RTA_DATA(rta);
 				strncpy(iface->name, name, IF_NAMESIZE - 1);
 				break;
 			case IFLA_LINK:
