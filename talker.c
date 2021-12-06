@@ -18,7 +18,6 @@
 #include <bpf/libbpf.h>
 #include <linux/if_link.h>
 
-#include "talker.skel.h"
 #include "common.h"
 #include "config.h"
 #include "connection.h"
@@ -27,7 +26,7 @@
 #include "packet.h"
 #include "utils.h"
 
-static bool g_running = true;
+bool g_running = true;
 
 void closing_handler(int signum) {
     (void)signum;
@@ -37,67 +36,6 @@ void closing_handler(int signum) {
     
     g_running = false;
 }
-
-int load_bpf_object_file__simple(const char *filename) {
-    i32 first_prog_fd = -1;
-    struct bpf_object *obj = NULL;
-
-    i32 err = bpf_prog_load(filename,BPF_PROG_TYPE_XDP, &obj, &first_prog_fd);
-    if (err) {
-        LOG_ERROR("Failed to load BPF-OBJ file %s: %s", filename, strerror(err));
-    }
-
-    return first_prog_fd;
-}
-
-i32 xdp_link_detach(i32 ifindex, u32 xdp_flags) {
-	i32 err;
-	if ((err = bpf_set_link_xdp_fd(ifindex, -1, xdp_flags)) < 0) {
-		LOG_ERROR("Failed to unload BPF-PROG from interface %d: %s", ifindex, 
-				strerror(errno));
-		return -1;
-	}
-
-	return 0;
-}
-
-i32 xdp_link_attach(i32 ifindex, u32 xdp_flags, i32 prog_fd) {
-	i32 err = bpf_set_link_xdp_fd(ifindex, prog_fd, xdp_flags);
-	if (err == -EEXIST && !(xdp_flags & XDP_FLAGS_UPDATE_IF_NOEXIST)) {
-		u32 old_flags = xdp_flags;
-		xdp_flags &= ~XDP_FLAGS_MODES;
-		xdp_flags |= (old_flags & XDP_FLAGS_SKB_MODE) 
-				? XDP_FLAGS_DRV_MODE
-				: XDP_FLAGS_SKB_MODE;
-		
-		err = bpf_set_link_xdp_fd(ifindex, prog_fd, old_flags);
-		if (!err) {
-			err = bpf_set_link_xdp_fd(ifindex, prog_fd, old_flags);
-		}
-	}
-
-	if (err < 0) {
-		LOG_ERROR("Failed to load BPF-PROG in interface %d: %s", ifindex,
-				strerror(errno));
-
-		switch (-err) {
-			case EBUSY:
-			case EEXIST:
-				LOG_DEBUG("\t>hint: XDP already loaded on device");
-				break;
-			case EOPNOTSUPP:
-				LOG_DEBUG("\t>hint: Native-XDP not supported");
-				break;
-			default:
-				break;
-		}
-
-		return -1;
-	}
-
-	return 0;
-}
-
 
 int main(int argc, char *argv[]) {
     (void)argc;
@@ -155,12 +93,6 @@ int main(int argc, char *argv[]) {
 
     u8 msg_buf[1500];
 
-	i32 prog_fd = load_bpf_object_file__simple(cfg.bpf_prog);
-	if (prog_fd <= 0) {
-		LOG_ERROR("Failed to load BPF-OBJ file");
-		return -1;
-	}
-
     // Choose the sending semantic
     if (!cfg.enable_txtime) {
         #if 0
@@ -215,7 +147,7 @@ int main(int argc, char *argv[]) {
 
         struct custom_payload *payload_ptr = (struct custom_payload *)offset;
         packet_size += sizeof(struct custom_payload);
-        while (g_running) {
+        while (g_running && seq < cfg.offset * 100) {
             i32 sleep_ret = clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &ts, NULL);
             if (sleep_ret) {
                 LOG_WARN("Failed to sleep %d: %s", sleep_ret, strerror(sleep_ret));
@@ -224,8 +156,6 @@ int main(int argc, char *argv[]) {
 
             payload_ptr->tx_queue = cfg.sk_prio;
             payload_ptr->seq = seq;
-       
-            // LOG_TRACE("Send packet %d (size = %llu): %lld == %lld", seq, packet_size, current_time, txtime);
            
             u64 current_time = get_realtime_ns();
             payload_ptr->tx_timestamp = current_time;
@@ -237,10 +167,6 @@ int main(int argc, char *argv[]) {
             update_lopping_and_txtime(&ts, &looping_ts, &txtime, cfg.period);
             seq += 1;
 
-            usleep(100);
-
-            // LOG_WARN("number of poll: %d", ;
-
             struct packet_timestamps pts = {0};
 
             // Check if error are pending on the error queue
@@ -250,13 +176,13 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            LOG_INFO(
-                "(%d, %d) > usr: %llu   sched: %llu   sw: %llu   hw: %llu\n"
-                "\tsw-user: %llu\tsw-sched: %llu",
-                pts.sw_clock, pts.hw_clock,
-                current_time, timespec_to_ns(&pts.sched), timespec_to_ns(&pts.sw), timespec_to_ns(&pts.hw),
-                timespec_to_ns(&pts.sw) - current_time, timespec_to_ns(&pts.sw) - timespec_to_ns(&pts.sched)
-            );
+            // LOG_INFO(
+            //     "(%d, %d) > usr: %llu   sched: %llu   sw: %llu   hw: %llu\n"
+            //     "\tsw-user: %llu\tsw-sched: %llu",
+            //     pts.sw_clock, pts.hw_clock,
+            //     current_time, timespec_to_ns(&pts.sched), timespec_to_ns(&pts.sw), timespec_to_ns(&pts.hw),
+            //     timespec_to_ns(&pts.sw) - current_time, timespec_to_ns(&pts.sw) - timespec_to_ns(&pts.sched)
+            // );
         }
     }
 

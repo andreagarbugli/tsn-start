@@ -6,7 +6,7 @@
 #include "logger.h"
 #include "utils.h"
 
-static bool g_running = true;
+bool g_running = true;
 
 void handler(i32 signum) {
     (void)signum;

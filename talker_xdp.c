@@ -30,10 +30,13 @@
 #include "xdp_common.h"
 #include "xsk_common.h"
 
-//#include "talker.skel.h"
+#define DEFAULT_VALUE 4096
 
-#define NUM_FRAMES         4096 /* Frames per queue */
-#define RX_BATCH_SIZE      64
+typedef struct interface_min {
+	char name[IF_NAMESIZE];
+	u32 index;
+	u32 queue_id;
+} interface_min_t;
 
 bool g_running = true;
 char *config_filename = "config.cfg";
@@ -90,232 +93,11 @@ i32 set_memory_limit_to_infinity() {
 	return 0;
 }
 
-u32 g_xdp_flags = 0;
-i32 g_ifindex = 0;
-
-typedef struct packet_buffer {
-	struct xsk_ring_prod rx_fill_ring;
-	struct xsk_ring_cons tx_comp_ring;
-	struct xsk_umem *umem;
-	void *buffer;
-} packet_buffer_t;
-
-typedef struct xsk_options {
-	u8 queue;
-	u32 xdp_flags;
-	u32 xdp_bind_flags;
-
-	u16 frame_size;
-	u16 frame_per_ring;
-
-	bool need_wakeup;
-
-	u64 test_packet_num;
-} xsk_options_t;
-
-typedef struct xsk_info {
-	struct xsk_socket *xsk;
-	
-	// User process managed rings (do not access directly)
-	struct xsk_ring_cons rx_ring;
-	struct xsk_ring_prod tx_ring;
-
-	u32 bpf_prog_id;
-
-	// To track current addr (pkt count * frame_size)
-	u32 cur_tx;
-	u32 cur_rx;
-
-	// UMEM and rings
-	packet_buffer_t *pkt_buffer; 
-
-	// TODO(garbu): some per-XDP socket stats
-	u64 rx_packets;
-	u64 prev_rx_packets;
-	u64 tx_packets;
-	u64 prev_tx_packets;
-	u32 outstanding_tx;
-} xsk_info_t;
-
-struct __attribute__((packed)) xdp_packet_test {
-	struct ethhdr eth;
-	u8 data[64];
-};
-
-packet_buffer_t *create_umem(xsk_options_t *opts, void *ubuf) {
-	struct xsk_umem_config uconfig = {0};
-	uconfig.fill_size = opts->frame_per_ring;
-	uconfig.comp_size = opts->frame_per_ring;
-	uconfig.frame_size = opts->frame_size;
-	uconfig.frame_headroom = XSK_UMEM__DEFAULT_FRAME_HEADROOM;
-
-	u64 single_umem_ring_size = opts->frame_per_ring * opts->frame_size;
-
-	i32 ret = posix_memalign(&ubuf, getpagesize(), single_umem_ring_size);
-	if (ret) {
-		LOG_ERROR("Failed to posix_memalign: %s", strerror(errno));
-		return NULL;
-	}
-
-	packet_buffer_t *pkt_buf_tmp = calloc(1, sizeof(packet_buffer_t));
-
-	ret = xsk_umem__create(&pkt_buf_tmp->umem, ubuf, single_umem_ring_size,
-						   &pkt_buf_tmp->rx_fill_ring, &pkt_buf_tmp->tx_comp_ring,
-						   &uconfig);
-	if (ret) {
-		LOG_ERROR("Failed to create UMEM: %s", strerror(errno));
-		return NULL;
-	}
-
-	pkt_buf_tmp->buffer = ubuf;
-
-	u32 idx = 0;
-	ret = xsk_ring_prod__reserve(&pkt_buf_tmp->rx_fill_ring, opts->frame_per_ring, &idx);
-	if (ret != opts->frame_per_ring) {
-		LOG_ERROR("Failed to create UMEM (xsk_ring_prod__reserve): %s (%d)", 
-				  strerror(-ret), -ret);
-		return NULL;
-	} 
-	
-	for (u16 i = 0; i < opts->frame_per_ring; ++i) {
-		*xsk_ring_prod__fill_addr(&pkt_buf_tmp->rx_fill_ring, idx++) = i * opts->frame_size;
-	}
-
-	xsk_ring_prod__submit(&pkt_buf_tmp->rx_fill_ring, opts->frame_per_ring);
-
-	return pkt_buf_tmp;
-}
-
-packet_buffer_t *xdp_socket__init(xsk_options_t *opts, i32 ifindex) {
-	opts->xdp_flags |= XDP_FLAGS_UPDATE_IF_NOEXIST;
-
-	// init with XDP_SKB_COPY_MODE
-	opts->xdp_flags |=  XDP_FLAGS_SKB_MODE;
-	opts->xdp_bind_flags |= XDP_COPY;
-
-	if (opts->need_wakeup) {
-		opts->xdp_bind_flags |= XDP_USE_NEED_WAKEUP;
-	}
-
-	opts->frame_per_ring = 4096;
-	opts->frame_size = 4096;
-
-	g_xdp_flags = opts->xdp_flags;
-	g_ifindex = ifindex;
-
-	void *ubuf = NULL;
-	
-	return create_umem(opts, ubuf);
-}
-
-xsk_info_t *create_xsk_info(xsk_options_t *opts, packet_buffer_t *packet_buffer, 
-						    const char *iface, i32 ifindex) {
-	xsk_info_t *xsk_info_temp = calloc(1, sizeof(xsk_info_t));
-
-	struct xsk_socket_config cfg = {0};
-	cfg.rx_size = opts->frame_per_ring;
-	cfg.tx_size = opts->frame_per_ring;
-
-	xsk_info_temp->pkt_buffer = packet_buffer;
-
-	cfg.libbpf_flags = 0;
-	cfg.xdp_flags = opts->xdp_flags;
-	cfg.bind_flags = opts->xdp_bind_flags;
-
-	i32 ret = xsk_socket__create(&xsk_info_temp->xsk, iface, 
-				     opts->queue, xsk_info_temp->pkt_buffer->umem,
-				     &xsk_info_temp->rx_ring, &xsk_info_temp->tx_ring, 
-				     &cfg);
-	if (ret) {
-		LOG_ERROR("Failed to create XDP socket: %s", strerror(-ret));
-		return NULL;
-	}
-
-	ret = bpf_get_link_xdp_id(ifindex, &xsk_info_temp->bpf_prog_id, opts->xdp_flags);
-	if (ret) {
-		LOG_ERROR("Failed to get XDP-PROG id from interface");
-		return NULL;
-	}
-
-	return xsk_info_temp;
-}
-
-const char TEST_PAYLOAD = 'a';
-
-static void create_test_packet(struct xdp_packet_test *packet) {
-	packet->eth.h_proto = htons(ETH_P_TSN);
-	packet->eth.h_dest[0] = 0x01;
-	packet->eth.h_dest[1] = 0x00;
-	packet->eth.h_dest[2] = 0x5e;
-	packet->eth.h_dest[3] = 0x00;
-	packet->eth.h_dest[4] = 0x00;
-	packet->eth.h_dest[5] = 0x01;
-	packet->eth.h_source[0] = 0x00;
-	packet->eth.h_source[1] = 0x00;
-	packet->eth.h_source[2] = 0x00;
-	packet->eth.h_source[3] = 0x00;
-	packet->eth.h_source[4] = 0x00;
-	packet->eth.h_source[5] = 0x00; 
-	memcpy(packet->data, &TEST_PAYLOAD, 64);
-}
-
-i32 send_packet_using_xdp(xsk_options_t *opts, struct xdp_packet_test *packet,
-	 					  xsk_info_t *xsk_info, u32 current_tx_slot) {
-	u64 addr = current_tx_slot << opts->frame_size;
-	u8 *umem_data = xsk_umem__get_data(xsk_info->pkt_buffer->buffer, addr);
-
-	// TODO(garbu) build the packet
-	memcpy(umem_data, packet, sizeof(struct xdp_packet_test));
-
-	u32 packet_per_send = 1; // No batch
-	u32 idx = 0;
-	if (xsk_ring_prod__reserve(&xsk_info->tx_ring, packet_per_send, &idx) != packet_per_send) {
-		LOG_WARN("Failed to reserve space for producer ring");
-		return 0;
-	}
-
-	struct xdp_desc* desc = xsk_ring_prod__tx_desc(&xsk_info->tx_ring, idx);
-	desc->addr = current_tx_slot << opts->frame_size;
-	desc->len = sizeof(struct xdp_packet_test);
-
-	xsk_ring_prod__submit(&xsk_info->tx_ring, packet_per_send);
-	xsk_info->outstanding_tx += packet_per_send;
-	current_tx_slot += packet_per_send;
-	current_tx_slot %= opts->frame_per_ring;
-
-	i32 ret = sendto(xsk_socket__fd(xsk_info->xsk), NULL, 0, MSG_DONTWAIT, NULL, 0);
-	if (ret < 0) {
-		LOG_ERROR("sendto error: %s (%d)", strerror(errno), errno);
-		return -1;
-	} else {
-		LOG_DEBUG("bytes sent: %d (%s)", ret, strerror(errno));
-		return 0;
-	}
-}
-
-void *allocate_memory_buffer_mmap(xsk_options_t *opts, bool is_unaligned) {
-	(void)is_unaligned;
-	i32 optional_flags = 0; // TODO(garbu): check how to use HUGETLB or other flags
-	// i32 optional_flags = is_unaligned ? MAP_HUGETLB : 0;
-
-	void *buf = mmap(NULL, NUM_FRAMES * opts->frame_size, PROT_READ | PROT_WRITE,
-					 MAP_PRIVATE | optional_flags, -1, 0);
-	if (buf == MAP_FAILED) {
-		LOG_ERROR("mmap failed: %s", strerror(errno));
-		return NULL;
-	}
-
-	return buf;
-}
-
-void *allocate_memory_buffer_posix(xsk_options_t *opts) {
-	u64 single_umem_ring_size = opts->frame_per_ring * opts->frame_size;
-
+void *allocate_umem_area_with_posix_memalign(u64 umem_ring_size) {
 	i32 alignment = getpagesize();
-	LOG_DEBUG("UMEM ring size: %lld (%d)", single_umem_ring_size, alignment);
 
 	void *buf = NULL;
-	i32 ret = posix_memalign(&buf, alignment, single_umem_ring_size);
+	i32 ret = posix_memalign(&buf, alignment, umem_ring_size);
 	if (ret) {
 		LOG_ERROR("Failed to posix_memalign: %s", strerror(errno));
 		return NULL;
@@ -324,160 +106,354 @@ void *allocate_memory_buffer_posix(xsk_options_t *opts) {
 	return buf;
 }
 
-xsk_umem_info_t *configure_xsk_umem_info(xsk_options_t *opts, void *buffer, bool is_unaligned) {
+/**
+ * @brief UMEM is associated to a netdev and a specific queue id of that netdev.
+ * It is created and configured (chunk size, headroom, start address and size) 
+ * by using the XDP_UMEM_REG setsockopt system call. UMEM uses two rings: FILL and
+ * COMPLETION. Each socket associated with the UMEM must have an RX queue, TX queue or both.
+ * 
+ * @param umem 
+ * @param params 
+ * @param is_unaligned 
+ * @return i32 
+ */
+i32 xdp_umem__init(xdp_umem_t *umem, xsk_config_params_t *params, bool is_unaligned) {
 	u32 umem_flags = is_unaligned ? XDP_UMEM_UNALIGNED_CHUNK_FLAG : 0;
 
 	struct xsk_umem_config umem_config = {
-		.fill_size = XSK_RING_PROD__DEFAULT_NUM_DESCS * 2,
-		.comp_size = XSK_RING_CONS__DEFAULT_NUM_DESCS,
-		.frame_size = opts->frame_size,
+		.fill_size = params->number_of_desc_fill_queue * 2,
+		.comp_size = params->number_of_desc_comp_queue,
+		.frame_size = params->frame_size,
 		.frame_headroom = XSK_UMEM__DEFAULT_FRAME_HEADROOM,
 		.flags = umem_flags
 	};
 
-	xsk_umem_info_t *umem_tmp = calloc(1, sizeof(xsk_umem_info_t));
-	if (!umem_tmp) {
-		LOG_WARN("(%s) - calloc failed: %s", __func__, strerror(errno));
-		return NULL;
-	}
-
-	LOG_DEBUG("buffer address: %p", buffer);
-
-	u64 size = opts->frame_size * NUM_FRAMES; // TODO(garbu): dynamic frame number?
-	i32 ret = xsk_umem__create(&umem_tmp->umem, buffer, size, 
-							   &umem_tmp->init_fq, &umem_tmp->init_cq, 
+	u64 size = params->frame_size * params->frames_per_ring; // TODO(garbu): dynamic frame number?
+	i32 ret = xsk_umem__create(&umem->umem, umem->buffer_area, size, 
+							   &umem->fill_queue, &umem->comp_queue, 
 							   &umem_config);
 	if (ret) {
 		LOG_ERROR("Failed xsk_umem_create: %s", strerror(-ret));
+		return -1;
+	}
+
+	if (params->flags & XSK_CONFIG_FLAGS_RX) {
+		LOG_INFO("Configuring the UMEM for RX");
+		u32 frame_per_ring = params->number_of_desc_fill_queue;
+		u32 idx = 0;
+		u32 sret = xsk_ring_prod__reserve(&umem->fill_queue, frame_per_ring, &idx);
+		if (sret != frame_per_ring) {
+			return -1;
+		}
+
+		for (u64 i = 0; i < frame_per_ring; i++) {
+			u64 *addr = (u64 *)xsk_ring_prod__fill_addr(&umem->fill_queue, idx++);
+			*addr = i * params->frame_size;
+		}
+
+		xsk_ring_prod__submit(&umem->fill_queue, frame_per_ring);
+	}
+
+	return 0;
+}
+
+/**
+ * @brief Configure AF_XDP socket to redirect frames to a memory buffer in 
+ *  a user-space application XSK has two rings: the RX ring and the TX ring
+ *  A socket can receive packets on the RX ring and it can send packets on the TX ring
+ * 
+ * @param params 
+ * @return i32 
+ */
+xdp_socket_t *xdp_connection__create(xsk_config_params_t *params, interface_min_t *iface) {
+	i32 ret = set_memory_limit_to_infinity();
+	if (ret < 0) {
 		return NULL;
 	}
 
-	umem_tmp->buffer = buffer;
-	return umem_tmp;
-}
-
-typedef struct interface_min {
-	char name[IF_NAMESIZE];
-	u32 index;
-} interface_min_t;
-
-// NOTE(garbu): currently we support only one socket per interface
-xsk_socket_info_t *configure_xsk_socket_for_tx(xsk_options_t *opts, xsk_umem_info_t *umem_info,
-											   interface_min_t *iface) {
-	xsk_socket_info_t *xsk_info_tmp = calloc(1, sizeof(xsk_socket_info_t));
-	if (!xsk_info_tmp) {
+	xdp_socket_t *xdp_sock = calloc(1, sizeof(xdp_socket_t));
+	if (!xdp_sock) {
 		LOG_WARN("(%s) - calloc failed: %s", __func__, strerror(errno));
 		return NULL;
 	}
 
-	xsk_info_tmp->umem_info = umem_info;
-	
-	struct xsk_socket_config xsk_config = {
-		.rx_size = XSK_RING_CONS__DEFAULT_NUM_DESCS,
-		.tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
-		.libbpf_flags = 0, // we can change this to support multi socket.
-		.xdp_flags = opts->xdp_flags,
-		.bind_flags = opts->xdp_bind_flags
-	};
-
-	LOG_TRACE("Creating the XDP socket `xsk_socket__create` interface %s (%d)",
-		      iface->name, iface->index);
-	i32 ret = xsk_socket__create(&xsk_info_tmp->xsk, iface->name, opts->queue,
-						   	     umem_info->umem, NULL, &xsk_info_tmp->tx, &xsk_config);
-	if (ret) {
-		LOG_ERROR("Failed to create an XDP socket for TX: %s", strerror(-ret));
+	LOG_TRACE("Configuring the UMEM info");
+	xdp_sock->umem = calloc(1, sizeof(xdp_umem_t));
+	if (!xdp_sock->umem) {
+		LOG_WARN("(%s) - calloc failed: %s", __func__, strerror(errno));
+		free(xdp_sock);
 		return NULL;
 	}
 
-//	LOG_TRACE("Getting the XDP-PROG ID from the interface (bpf_get_link_xdp_id)");
-//	ret = bpf_get_link_xdp_id(iface->index, &xsk_info_tmp->bpf_prog_id, opts->xdp_flags);
-//	if (ret) {
-//		LOG_ERROR("Failed to get the XDP-PROG ID: %s", strerror(-ret));
-//		return NULL;
-//	}
-
-	// TODO(garbu): init some xsk_info_t app specific stats?
-
-	return xsk_info_tmp;
-}
-
-#define PAYLOAD_SIZE 64 
-#define PKT_SIZE PAYLOAD_SIZE - ETH_FCS_LEN
-
-static void kick_tx(struct xsk_socket_info *xsk_info)
-{
-	int ret = sendto(xsk_socket__fd(xsk_info->xsk), NULL, 0, MSG_DONTWAIT, NULL, 0);
-	if (ret >= 0 || errno == ENOBUFS 
-		|| errno == EAGAIN || errno == EBUSY 
-		|| errno == ENETDOWN) {
-		return;
+	/*
+	 * NOTE(garbu): potremmo mettere la funzione di allocazione del buffer
+	 * 	di memoria per la UMEM all'interno della funzione che configura 
+	 *  proprio la UMEM, ma facendo questa cosa fuori da essa, possiamo
+	 *  sfruttare diversi meccanismi di allocazione della memoria (es. mmap, hugepages).
+	 */
+	LOG_TRACE("Allocating memory for the UMEM");
+	u64 single_umem_ring_size = params->frames_per_ring * params->frame_size;
+	xdp_sock->umem->buffer_area = allocate_umem_area_with_posix_memalign(single_umem_ring_size); 
+	if (!xdp_sock->umem->buffer_area) {
+		LOG_ERROR("Failed tu allocate the memory buffer: exiting");
+		free(xdp_sock->umem);
+		free(xdp_sock);
+		return NULL;
 	}
 
-	LOG_WARN("In teoria c'e' un errore");
+	ret = xdp_umem__init(xdp_sock->umem, params, false);
+	if (ret < 0) {
+		LOG_ERROR("Failed tu configure umem info: exiting");
+		free(xdp_sock->umem->buffer_area);
+		free(xdp_sock->umem);
+		free(xdp_sock);
+		return NULL;
+	}
+
+	xdp_sock->outstanding_tx = 0;
+	// xdp_sock->rx_idx = 0;
+	// xdp_sock->tx_idx = 0;
+	
+	struct xsk_socket_config xsk_config = {
+		.rx_size = params->number_of_desc_fill_queue,
+		.tx_size = params->number_of_desc_comp_queue,
+		.libbpf_flags = 0, // we can change this to support multi socket.
+		.xdp_flags = params->xdp_flags,
+		.bind_flags = params->xdp_bind_flags
+	};
+
+	struct xsk_ring_prod *tx_ring = params->flags & XSK_CONFIG_FLAGS_TX 
+									? &xdp_sock->tx_ring 
+									: NULL;  
+	struct xsk_ring_cons *rx_ring = params->flags & XSK_CONFIG_FLAGS_RX 
+									? &xdp_sock->rx_ring 
+									: NULL;  
+
+	LOG_TRACE("Creating the XDP socket `xsk_socket__create` interface %s (%d)",
+		      iface->name, iface->index);
+	ret = xsk_socket__create(&xdp_sock->xsk_fd, 
+								 iface->name, iface->queue_id,
+						   	     xdp_sock->umem->umem, 
+								 rx_ring, tx_ring, 
+								 &xsk_config);
+
+	if (ret == ENOTSUP) {
+        LOG_ERROR("Failed to create XDP connection. xsk_socket__create not supported.");
+        free(xdp_sock->umem->buffer_area);
+        (void)xsk_umem__delete(xdp_sock->umem->umem);
+        free(xdp_sock->umem);
+        free(xdp_sock);
+        return NULL;
+    } else if (ret < 0) {
+		LOG_ERROR("Failed to create XDP connection. xsk_socket__create failed: %s",
+		 		  strerror(errno));
+		free(xdp_sock->umem->buffer_area);
+        (void)xsk_umem__delete(xdp_sock->umem->umem);
+        free(xdp_sock->umem);
+        close(xsk_socket__fd(xdp_sock->xsk_fd));
+        bpf_set_link_xdp_fd(iface->index, -1, params->xdp_flags);
+        free(xdp_sock);
+        return NULL;
+    }
+
+	LOG_TRACE("Getting the XDP-PROG ID from the interface (bpf_get_link_xdp_id)");
+	ret = bpf_get_link_xdp_id(iface->index, &xdp_sock->bpf_prog_id, params->xdp_flags);
+	if (ret) {
+		LOG_ERROR("Failed to get the XDP-PROG ID: %s", strerror(-ret));
+		free(xdp_sock->umem->buffer_area);
+        (void)xsk_umem__delete(xdp_sock->umem->umem);
+        free(xdp_sock->umem);
+        close(xsk_socket__fd(xdp_sock->xsk_fd));
+        bpf_set_link_xdp_fd(iface->index, -1, params->xdp_flags);
+        free(xdp_sock);
+        return NULL;
+	}
+
+	return xdp_sock;
 }
 
-i32 start_tx_only(xsk_options_t *opts, xsk_socket_info_t *xsk_info) {
-	u32 frame_nb = 0;
-	i32 pkt_count = 0;
-	while (pkt_count < opts->test_packet_num) {
-		LOG_TRACE("usleep");
-		usleep(100000);
+i32 xdp_connection__send(xdp_socket_t *xdp_sock, xsk_config_params_t *params, u8 *data, size_t len) {
+	u8 *packet_buffer = xsk_umem__get_data(xdp_sock->umem->buffer_area, 
+										   xdp_sock->cur_tx * params->frame_size);
+	
+	struct ethhdr *eth_hdr = (struct ethhdr *)packet_buffer;
 
+	// Ethernet header
+	memcpy(eth_hdr->h_source, "\x3c\xfd\xfe\x9e\x7f\x71", ETH_ALEN);
+	memcpy(eth_hdr->h_dest, "\x01\x00\x5e\x00\x00\x01", ETH_ALEN);
+	eth_hdr->h_proto = htons(ETH_P_TSN);
 
-		LOG_TRACE("sending");
-		u32 packet_per_send = 1; // No batch
-		u32 idx = 0;
-		i32 ret = xsk_ring_prod__reserve(&xsk_info->tx, packet_per_send, &idx);
-		// if (ret < packet_per_send) {
-			// if (!xsk_info->outstanding_tx) {
-			// 	LOG_TRACE("TRACE 1");
-			// 	return -1;
-			// }
+	size_t packet_len = len + ETH_HLEN;
+	u8 *payload_ptr = packet_buffer + ETH_HLEN;
 
-			if (!opts->need_wakeup || xsk_ring_prod__needs_wakeup(&xsk_info->tx)) {
-				// xsk->app_stats.tx_wakeup_sendtos++;
-				LOG_TRACE("TRACE 2: kick_tx");
-				kick_tx(xsk_info);
-			}
+	if (packet_len > params->frame_size) {
+		LOG_ERROR("Packet is too big");
+		return -1;
+	}
 
-			u32 idx2;
-			u32 rcvd = xsk_ring_cons__peek(&xsk_info->umem_info->init_cq, packet_per_send, &idx2);
+	// Set the payload with the data to be sent
+	memcpy(payload_ptr, data, len);
+
+	// NOTE(garbu): we now support the sending of one message at time
+	// TODO(garbu): add batch support?number_of_packets?
+	u32 idx = 0;
+	u32 number_of_packets = 1;
+	if (xsk_ring_prod__reserve(&xdp_sock->tx_ring, number_of_packets, &idx) 
+		!= number_of_packets
+	) {
+		LOG_ERROR("XDP connection send failed. xsk_ring_prod__reserve failed.");
+		return -1;
+	}
+
+	struct xdp_desc *desc = xsk_ring_prod__tx_desc(&xdp_sock->tx_ring, idx);
+	desc->addr = xdp_sock->cur_rx * params->frame_size;
+	desc->len = packet_len;
+
+	xsk_ring_prod__submit(&xdp_sock->tx_ring, number_of_packets);
+	xdp_sock->outstanding_tx += number_of_packets;
+
+	// Increase the current tx pointer, rollover if exceed
+	xdp_sock->cur_tx += 0;
+	xdp_sock->cur_tx %= params->frames_per_ring;
+
+	if (!params->need_wakeup || xsk_ring_prod__needs_wakeup(&xdp_sock->tx_ring)) {
+		i32 ret = sendto(xsk_socket__fd(xdp_sock->xsk_fd), NULL, 0, MSG_DONTWAIT, NULL, 0);
+		if (ret >= 0 || errno == ENOBUFS || errno == EAGAIN || errno == EBUSY) {
+			u32 rcvd = xsk_ring_cons__peek(&xdp_sock->umem->comp_queue, 1, &idx);
 			if (rcvd > 0) {
-				LOG_TRACE("TRACE 3");
-				xsk_ring_cons__release(&xsk_info->umem_info->init_cq, rcvd);
-				xsk_info->outstanding_tx -= rcvd;
+				xsk_ring_cons__release(&xdp_sock->umem->comp_queue, rcvd);
+				xdp_sock->outstanding_tx -= rcvd;
+				xdp_sock->stats.tx_packets += rcvd;
 			}
-			// LOG_WARN("Failed to reserve space for producer ring: %d", ret);
-			// return 0;
-		// }
 
-		// TODO(garbu): complete_tx_only
+			return 0;
+		}
+	}
 
-		struct xdp_desc *tx_desc = xsk_ring_prod__tx_desc(&xsk_info->tx, idx);
-		tx_desc->addr = frame_nb * opts->frame_size;
-		tx_desc->len = PKT_SIZE;
-	
-		xsk_ring_prod__submit(&xsk_info->tx, packet_per_send);
-		xsk_info->outstanding_tx += packet_per_send;
-		frame_nb += packet_per_send;
-		frame_nb %= NUM_FRAMES;
+	LOG_ERROR("XDP connection send failed: %s", strerror(errno));
+	return -1;
+}
 
-		// i32 ret = sendto(xsk_socket__fd(xsk_info->xsk), NULL, 0, MSG_DONTWAIT, NULL, 0);
-		// if (ret < 0) {
-		// 	LOG_ERROR("sendto error: %s (%d)", strerror(errno), errno);
-		// 	return -1;
-		// } else {
-		// 	LOG_DEBUG("bytes sent: %d (%s)", ret, strerror(errno));
-		// 	return 0;
-		// }
-		pkt_count += packet_per_send;
-	
+i32 xdp_connection__receive(xdp_socket_t *xdp_sock) {
+	u32 rx_idx = 0;
+	u32 rcvd = xsk_ring_cons__peek(&xdp_sock->rx_ring, 1, &rx_idx);
+	if (!rcvd) {
+		return -1;
+	}
+
+	u32 fq_idx = 0;
+	u32 ret = xsk_ring_prod__reserve(&xdp_sock->umem->fill_queue, rcvd, &fq_idx);
+	while (ret != rcvd) {
+		if (ret < 0) {
+			LOG_ERROR("Failed");
+			return -1;
+		}
+
+		ret = xsk_ring_prod__reserve(&xdp_sock->umem->fill_queue, rcvd, &fq_idx);
+	}
+
+	for (u64 i = 0; i < rcvd; i++) {
+		const struct xdp_desc *desc = xsk_ring_cons__rx_desc(&xdp_sock->rx_ring, rx_idx);
+
+		u8 *packet = xsk_umem__get_data(xdp_sock->umem->buffer_area, desc->addr);
+
+		if (!desc->len) {
+			LOG_WARN("Received a packet with ZERO length");
+			continue;
+		}
+
+		u64 rx_timestamp = get_realtime_ns();
+		
+		custom_payload_t *payload_ptr = (custom_payload_t*)(packet + ETH_HLEN);
+		// Handle Packet 
+
+		LOG_INFO("rx: %lld\ttx: %lld\tlat: %lld", 
+				 rx_timestamp, payload_ptr->tx_timestamp,
+				 rx_timestamp - payload_ptr->tx_timestamp);
+
+	}
+
+	xsk_ring_prod__submit(&xdp_sock->umem->fill_queue, rcvd);
+	xsk_ring_cons__release(&xdp_sock->rx_ring, rcvd);
+
+	xdp_sock->stats.rx_packets += rcvd;
+
+	return 0;
+}
+
+void xdp_connection__close(xdp_socket_t *xdp_sock, 
+						  xsk_config_params_t *params,
+						  interface_min_t *iface) 
+{
+	do {
+		u32 current_prog_id = 0;
+		if (bpf_get_link_xdp_id(iface->index, &current_prog_id, params->xdp_flags)) {
+			LOG_ERROR("Failed to get current XDP-PROG from interface %s", iface->name);
+			break;
+		}
+
+		if (xdp_sock->bpf_prog_id == current_prog_id) {
+			bpf_set_link_xdp_fd(iface->index, -1, params->xdp_flags);
+		} else if (!current_prog_id) {
+			LOG_WARN("Couldn't find a program on the given interface %s", iface->name);
+		} else {
+			LOG_WARN("Program in interface %s in changed, not removing", iface->name);
+		}
+	} while (false);
+
+	xsk_socket__delete(xdp_sock->xsk_fd);
+	(void)xsk_umem__delete(xdp_sock->umem->umem);
+	free(xdp_sock->umem->buffer_area);
+	free(xdp_sock->umem);
+	free(xdp_sock);
+}
+
+void do_tx(struct global_state *state, xdp_socket_t *sock, xsk_config_params_t *params) {
+	struct timespec ts;
+    u64 looping_ts = get_realtime_ns() + NSEC_PER_SEC;
+    u64 txtime = 0;
+	u64 period = state->cfg.period;
+	u64 offset = state->cfg.offset;
+    setup_looping_ts_and_txtime(&ts, &looping_ts, &txtime, period, offset);
+
+	u8 data[64] = {0};
+	u8 *data_ptr = &data[0];
+	// memcpy(data_ptr, "\x3c\xfd\xfe\x9e", 4);
+	custom_payload_t *payload_ptr = (custom_payload_t *)(data_ptr);
+
+	i32 pkt_count = 0;
+	while (1 && pkt_count < state->cfg.offset * 100) {
+		i32 sleep_ret = clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &ts, NULL);
+		if (sleep_ret) {
+			LOG_WARN("Failed to sleep %d: %s", sleep_ret, strerror(sleep_ret));
+			break;
+		}   
+
+		payload_ptr->seq = pkt_count;
+		payload_ptr->tx_timestamp = get_realtime_ns();
+
+		LOG_INFO("tx time: %lld", payload_ptr->tx_timestamp);
+		xdp_connection__send(sock, params, data, sizeof(data));
+		
+		update_lopping_and_txtime(&ts, &looping_ts, &txtime, period);
+
+		pkt_count += 1;
+
 		if (!g_running) {
 			break;
 		}
 	}
+}
 
-	return 0;
+void do_rx(xdp_socket_t *sock) {
+	LOG_INFO("Start receiving packets...");
+	while (1) {
+		(void)xdp_connection__receive(sock);
+
+		if (!g_running) {
+			break;
+		}
+	}
 }
 
 int main(int argc, char *argv[]) {
@@ -499,139 +475,49 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-	set_memory_limit_to_infinity();
+	interface_min_t iface = { .index = if_nametoindex(state.cfg.iface) };
+	memcpy(iface.name, state.cfg.iface, IF_NAMESIZE - 1);
 
-	xsk_options_t xsk_opts = {
-		.frame_size = 4096,
-		.frame_per_ring = 4096,
-		.need_wakeup = false,
-		.queue = 1,
+	xsk_config_params_t xsk_cfg_params = {
+		.frame_size = DEFAULT_VALUE,
+		.frames_per_ring = DEFAULT_VALUE,
+		.number_of_desc = DEFAULT_VALUE,
+		.number_of_desc_comp_queue = DEFAULT_VALUE,
+		.number_of_desc_fill_queue = DEFAULT_VALUE,
+		.flags = XSK_CONFIG_FLAGS_TX,
 		.xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST,
 		.xdp_bind_flags = XDP_COPY,
-		.test_packet_num = 20,
+		.need_wakeup = false
 	};
 
-	if (xsk_opts.need_wakeup) {
-		xsk_opts.xdp_bind_flags |= XDP_USE_NEED_WAKEUP;
+	xsk_cfg_params.xdp_flags |= XDP_FLAGS_SKB_MODE;
+	// xsk_cfg_params.xdp_flags |= XDP_FLAGS_DRV_MODE;
+	// WARN(garbu): zero-copy breaks the fucking system.
+	// xsk_cfg_params.xdp_bind_flags |= XDP_ZEROCOPY;
+
+	if (state.cfg.mode == RX_MODE_XDP) {
+		xsk_cfg_params.flags = 0;
+		xsk_cfg_params.flags = XSK_CONFIG_FLAGS_RX;
 	}
 
-	xsk_opts.xdp_flags |= XDP_FLAGS_SKB_MODE;
-
-	i32 ret = 0;
-
-	LOG_TRACE("Allocating memory for the UMEM");
-	void *buffer = allocate_memory_buffer_posix(&xsk_opts); 
-	if (!buffer) {
-		LOG_ERROR("Failed tu allocate the memory buffer: exiting");
+	xdp_socket_t *xdp_socket = xdp_connection__create(&xsk_cfg_params, &iface);
+	if (!xdp_socket) {
+		LOG_ERROR("Failed to create an XDP connection");
 		return -1;
 	}
 
-	LOG_TRACE("Configuring the UMEM info");
-	xsk_umem_info_t *umem_info = configure_xsk_umem_info(&xsk_opts, buffer, false);
-	if (!umem_info) {
-		LOG_ERROR("Failed tu configure umem info: exiting");
-		ret = -2;
-		goto clean;
-	}
-
-	interface_min_t iface = { .index = 3 };
-	memcpy(iface.name, "enp3s0", IF_NAMESIZE - 1);
-
-	LOG_TRACE("Configuring the XDP socket only for TX");
-	xsk_socket_info_t *xsk_info = configure_xsk_socket_for_tx(&xsk_opts, umem_info, &iface);
-	if (!xsk_info) {
-		LOG_ERROR("Failed to configure a new XDP socket for TX");
-		ret = -3;
-		goto clean;
-	}
-
-	u8 pkt_data[XSK_UMEM__DEFAULT_FRAME_SIZE];
-	struct ethhdr *eth_hdr = (struct ethhdr *)pkt_data;
-
-	// Ethernet header
-	memcpy(eth_hdr->h_source, "\x3c\xfd\xfe\x9e\x7f\x71", ETH_ALEN);
-	memcpy(eth_hdr->h_dest, "\x01\x00\x5e\x00\x00\x01", ETH_ALEN);
-	eth_hdr->h_proto = htons(ETH_P_TSN);
-
-	// Payload 
-	memcpy(pkt_data + ETH_HLEN, &TEST_PAYLOAD, PAYLOAD_SIZE);
-
-	LOG_TRACE("Generating all packets to be sent");
-	for (i32 i = 0; i < NUM_FRAMES; i++) {
-		u64 addr = i * xsk_opts.frame_size;
-		memcpy(xsk_umem__get_data(umem_info->buffer, addr), pkt_data, PKT_SIZE);
+	if (state.cfg.mode == RX_MODE_XDP) {
+		do_rx(xdp_socket);
+	} else {
+		do_tx(&state, xdp_socket, &xsk_cfg_params);
 	}
 	
-	start_tx_only(&xsk_opts, xsk_info);
-
-	LOG_TRACE("running...");
-
-clean:
 	LOG_TRACE("Cleaning all the stuff");
-
-	do {
-		u32 current_prog_id = 0;
-
-		if (bpf_get_link_xdp_id(iface.index, &current_prog_id, xsk_opts.xdp_flags)) {
-			LOG_ERROR("Failed to get current XDP-PROG from interface %s", iface.name);
-			break;
-		}
-
-		if (xsk_info->bpf_prog_id == current_prog_id) {
-			bpf_set_link_xdp_fd(iface.index, -1, xsk_opts.xdp_flags);
-		} else if (!current_prog_id) {
-			LOG_WARN("Couldn't find a program on the given interface %s", iface.name);
-		} else {
-			LOG_WARN("Program in interface %s in changed, not removing", iface.name);
-		}
-	} while (false);
-
-	free(buffer);
-	xsk_socket__delete(xsk_info->xsk);
-	xsk_umem__delete(umem_info->umem);
-	free(umem_info);
-	free(xsk_info);
+	xdp_connection__close(xdp_socket, &xsk_cfg_params, &iface);
 
 	// state__init(&state);
 	// do_run(&state);
 	// state__clear(&state);
 
-    return ret;
-}
-
-i32 old_test() {
-	char *iface = "enp3s0";
-	i32 ifindex = 1;
-	xsk_options_t xsk_opts = {0};
-	xsk_opts.need_wakeup = false;
-	
-	packet_buffer_t *packet_buffer = xdp_socket__init(&xsk_opts, ifindex);
-	if (!packet_buffer) {
-		LOG_ERROR("Failed to init XDP socket: %p", packet_buffer);
-		return -1;
-	}
-
-	xsk_info_t *xsk_info = create_xsk_info(&xsk_opts, packet_buffer, iface, ifindex);
-	if (!xsk_info) {
-		LOG_ERROR("Failed to create xsk_info_t");
-		return -1;
-	}
-
-	struct xdp_packet_test test_packet;
-	create_test_packet(&test_packet);
-	
-	u64 current_tx_slot = 0;
-	struct timespec ts = { .tv_nsec = 0, .tv_sec = 1 };
-	while (g_running)
-	{
-		// TODO(garbu): absolute sleep time TIMER_ABSTIME
-		clock_nanosleep(CLOCK_REALTIME, 0, &ts, NULL);
-
-		i32 ret = send_packet_using_xdp(&xsk_opts, &test_packet, xsk_info, current_tx_slot);
-		if (ret < 0) {
-			LOG_ERROR("send_packet_using_xdp");
-		}
-	}
-
-	return 0;
+    return 0;
 }

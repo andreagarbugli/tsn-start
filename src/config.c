@@ -125,6 +125,18 @@ int load_config(const char *filename, struct config *cfg) {
                     }
                 }
 
+                if (strncmp(name, "MODE", strnlen(name, BUFSIZE)) == 0) {
+                    if (strncmp(value, "TX_XDP", strnlen(value, BUFSIZE)) == 0) {
+                        cfg->mode = TX_MODE_XDP;
+                    } else if (strncmp(value, "RX_XDP", strnlen(value, BUFSIZE)) == 0) {
+                        cfg->mode = RX_MODE_XDP;
+                    } else if (strncmp(value, "RX_RAW", strnlen(value, BUFSIZE)) == 0) {
+                        cfg->mode = RX_MODE_RAW;
+                    } else {
+                        cfg->mode = TX_MODE_RAW;
+                    }
+                }
+
                 if (strncmp(name, "VLAN", strnlen(name, BUFSIZE)) == 0) {
                     int val = strtol(value, &endptr, 10);
                     if (errno || endptr != value) {

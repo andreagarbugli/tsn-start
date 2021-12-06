@@ -5,6 +5,11 @@
 
 #include "common.h"
 
+#define TX_MODE_RAW (1U << 0)
+#define RX_MODE_RAW (1U << 1)
+#define TX_MODE_XDP (1U << 2)
+#define RX_MODE_XDP (1U << 3)
+
 struct config {
     char iface[100];
     char dst_mac_addr[ETH_ALEN];
@@ -18,6 +23,8 @@ struct config {
     u64 offset;
     bool raw_socket;
     bool hwstamp_enabled;
+
+    u8 mode;
     
     bool realtime;
     i8 priority;

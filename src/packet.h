@@ -17,12 +17,12 @@ struct __attribute__((packed)) tsn_packet {
     u8 *payload;
 };
 
-struct custom_payload {
+typedef struct custom_payload {
     u32 tx_queue;
     u32 seq;
     u64 tx_timestamp;
     u64 rx_timestamp;
-};
+} custom_payload_t;
 
 
 u8** setup_tsn_packet(u8 *buf, u8 *src_mac_addr, struct config *cfg, size_t *packet_size);

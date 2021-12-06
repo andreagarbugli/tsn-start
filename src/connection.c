@@ -376,70 +376,75 @@ i32 listener_receive_message(i32 sock, struct config *cfg) {
 
     struct tsn_packet *pkt = (struct tsn_packet *)buf; 
     if (memcmp(cfg->dst_mac_addr, pkt->dst_mac, ETH_ALEN) == 0) {
-        u16 vlan_tci = 0;
-        u16 vlan_tpid = 0;
-        struct timespec *hwtstamp = NULL;
-        struct scm_timestamping *ts = NULL;
+        // u16 vlan_tci = 0;
+        // u16 vlan_tpid = 0;
+        // struct timespec *hwtstamp = NULL;
+        // struct scm_timestamping *ts = NULL;
         
-        for (
-            struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-            cmsg != NULL;
-            cmsg = CMSG_NXTHDR(&msg, cmsg)
-        ) {
-            if (cmsg->cmsg_level == SOL_SOCKET)
-            {
-                switch(cmsg->cmsg_type) 
-                {
-                case SO_TIMESTAMPNS:
-                    // ts = (struct timespec*) CMSG_DATA(cmsg);
-                    break;
-                case SO_TIMESTAMPING:
-                    ts = (struct scm_timestamping *)CMSG_DATA(cmsg);
-                    // actual.swtstamp = !!ts->ts[0].tv_sec;
-                    // if (ts->ts[1].tv_sec != 0)
-                    //     error(0, 0, "ts[1] should not be set.");
-	        		hwtstamp = &ts->ts[2];
-                    break;
-                default:
-                    break;
-                }
-            }
+        // for (
+        //     struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+        //     cmsg != NULL;
+        //     cmsg = CMSG_NXTHDR(&msg, cmsg)
+        // ) {
+        //     if (cmsg->cmsg_level == SOL_SOCKET)
+        //     {
+        //         switch(cmsg->cmsg_type) 
+        //         {
+        //         case SO_TIMESTAMPNS:
+        //             // ts = (struct timespec*) CMSG_DATA(cmsg);
+        //             break;
+        //         case SO_TIMESTAMPING:
+        //             ts = (struct scm_timestamping *)CMSG_DATA(cmsg);
+        //             // actual.swtstamp = !!ts->ts[0].tv_sec;
+        //             // if (ts->ts[1].tv_sec != 0)
+        //             //     error(0, 0, "ts[1] should not be set.");
+	    //     		hwtstamp = &ts->ts[2];
+        //             break;
+        //         default:
+        //             break;
+        //         }
+        //     }
 
-			if (cmsg->cmsg_len == CMSG_LEN(sizeof(struct tpacket_auxdata)) 
-                || cmsg->cmsg_level == SOL_PACKET 
-                || cmsg->cmsg_type == PACKET_AUXDATA
-            ) {
-                struct tpacket_auxdata *aux = (struct tpacket_auxdata *)CMSG_DATA(cmsg);
-                vlan_tci = aux->tp_vlan_tci;
-                vlan_tpid = aux->tp_vlan_tpid;
-            }
-        }
+		// 	if (cmsg->cmsg_len == CMSG_LEN(sizeof(struct tpacket_auxdata)) 
+        //         || cmsg->cmsg_level == SOL_PACKET 
+        //         || cmsg->cmsg_type == PACKET_AUXDATA
+        //     ) {
+        //         struct tpacket_auxdata *aux = (struct tpacket_auxdata *)CMSG_DATA(cmsg);
+        //         vlan_tci = aux->tp_vlan_tci;
+        //         vlan_tpid = aux->tp_vlan_tpid;
+        //     }
+        // }
 
-        LOG_TRACE(
-            "%02x:%02x:%02x:%02x:%02x:%02x > %02x:%02x:%02x:%02x:%02x:%02x"
-            " 0x%04x (802.1Q) VLAN %d PCP %d ethertype 0x%02x\t bytes %lld",
-            pkt->dst_mac[0], pkt->dst_mac[1], pkt->dst_mac[2], pkt->dst_mac[3], pkt->dst_mac[4], pkt->dst_mac[5],
-            pkt->src_mac[0], pkt->src_mac[1], pkt->src_mac[2], pkt->src_mac[3], pkt->src_mac[4], pkt->src_mac[5],
-            vlan_tpid, vlan_tci & 0x1FFF, vlan_tci >> 13, ntohs(pkt->vlan_hdr),
-            ret
-        );
+        // LOG_TRACE(
+        //     "%02x:%02x:%02x:%02x:%02x:%02x > %02x:%02x:%02x:%02x:%02x:%02x"
+        //     " 0x%04x (802.1Q) VLAN %d PCP %d ethertype 0x%02x\t bytes %lld",
+        //     pkt->src_mac[0], pkt->src_mac[1], pkt->src_mac[2], pkt->src_mac[3], pkt->src_mac[4], pkt->src_mac[5],
+        //     pkt->dst_mac[0], pkt->dst_mac[1], pkt->dst_mac[2], pkt->dst_mac[3], pkt->dst_mac[4], pkt->dst_mac[5],
+        //     vlan_tpid, vlan_tci & 0x1FFF, vlan_tci >> 13, ntohs(pkt->vlan_hdr),
+        //     ret
+        // );
 
-        fprintf(stderr, "\t");
-        for (int i = 0; i < ret; i += 2) {
-            fprintf(stderr, "%02x%02x ", buf[i], buf[i + 1]);
-        }
-        fprintf(stderr, "\n");
+        // fprintf(stderr, "\t");
+        // for (int i = 0; i < ret; i += 2) {
+        //     fprintf(stderr, "%02x%02x ", buf[i], buf[i + 1]);
+        // }
+        // fprintf(stderr, "\n");
 
-        u64 kts = 0;
-        if (hwtstamp) {
-            kts = hwtstamp->tv_sec * NSEC_PER_SEC + hwtstamp->tv_nsec;
-        }
+        // u64 kts = 0;
+        // if (hwtstamp) {
+        //     kts = hwtstamp->tv_sec * NSEC_PER_SEC + hwtstamp->tv_nsec;
+        // }
+
+        // struct custom_payload *data_ptr = (struct custom_payload*)&pkt->vlan_tci;
+        // LOG_INFO("%d - rx = %lld\tkts = %lld\ttx = %lld\t lat = %lld\t klat = %lld",
+        //     data_ptr->seq, rx_timestamp, kts, data_ptr->tx_timestamp,
+        //     rx_timestamp - data_ptr->tx_timestamp,
+        //     rx_timestamp - kts);
 
         struct custom_payload *data_ptr = (struct custom_payload*)&pkt->vlan_tci;
-        LOG_INFO("%d - rx = %lld\tktx = %lld\ttx = %lld\t lat = %lld\t klat = %lld",
-            data_ptr->seq, rx_timestamp, kts, data_ptr->tx_timestamp,
-            rx_timestamp - data_ptr->tx_timestamp,
-            rx_timestamp - kts);
+        LOG_INFO("%d - rx = %lld\ttx = %lld\tlat = %lld",
+            data_ptr->seq, rx_timestamp, data_ptr->tx_timestamp,
+            rx_timestamp - data_ptr->tx_timestamp);
     }
 
     return 0;
