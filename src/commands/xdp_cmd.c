@@ -21,8 +21,11 @@ i32 do_xdp_command(struct command_params *cp) {
                 printf("You must provide a BPF-PROG name\n");
             } else {
                 char cwd[PATH_MAX];
-                getcwd(cwd, PATH_MAX);
-                
+                char *res = getcwd(cwd, PATH_MAX);
+                if (!res) {
+                    LOG_ERROR("Can't get CWD");
+                }
+       
                 char prog_filename[8192];
                 snprintf(prog_filename, sizeof(prog_filename), "%s/out/%s",
                         cwd, cp->argv[1]);
@@ -42,8 +45,11 @@ i32 do_xdp_command(struct command_params *cp) {
     
     if (dump) {
         char cwd[PATH_MAX];
-        getcwd(cwd, PATH_MAX);
-        
+        char *res = getcwd(cwd, PATH_MAX);
+        if (!res) {
+            LOG_ERROR("Can't get CWD");
+        }
+         
         char bpf_directory[8192];
         snprintf(bpf_directory, sizeof(bpf_directory), "%s/%s", cwd, "out");
 

@@ -10,8 +10,13 @@
 #define TX_MODE_XDP (1U << 2)
 #define RX_MODE_XDP (1U << 3)
 
+#define XDP_SKB (1U << 0)
+#define XDP_DRV (1U << 1)
+#define XDP_ZC (1U << 2)
+
 struct config {
     char iface[100];
+    i32 queue;
     char dst_mac_addr[ETH_ALEN];
     i32 sk_prio;
     bool use_deadline_mode;
@@ -25,6 +30,7 @@ struct config {
     bool hwstamp_enabled;
 
     u8 mode;
+    u8 xdp_mode;
     
     bool realtime;
     i8 priority;

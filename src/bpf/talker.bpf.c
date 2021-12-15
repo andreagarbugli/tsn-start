@@ -4,7 +4,7 @@
 SEC("xdp")
 int xdp_func(struct xdp_md *ctx) 
 {
-    return XDP_DROP;
+    return XDP_PASS;
 }
 
-char _lincense[] SEC("license") = "GPL";
+char _license[] SEC("license") = "GPL";

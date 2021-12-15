@@ -137,6 +137,16 @@ int load_config(const char *filename, struct config *cfg) {
                     }
                 }
 
+                if (strncmp(name, "XDP_MODE", strnlen(name, BUFSIZE)) == 0) {
+                    if (strncmp(value, "DRV", strnlen(value, BUFSIZE)) == 0) {
+                        cfg->xdp_mode = XDP_DRV;
+                    } else if (strncmp(value, "ZC", strnlen(value, BUFSIZE)) == 0) {
+                        cfg->xdp_mode = XDP_ZC;
+                    } else if (strncmp(value, "RX_RAW", strnlen(value, BUFSIZE)) == 0) {
+                        cfg->xdp_mode = XDP_SKB;
+                    }
+                }
+
                 if (strncmp(name, "VLAN", strnlen(name, BUFSIZE)) == 0) {
                     int val = strtol(value, &endptr, 10);
                     if (errno || endptr != value) {
@@ -198,6 +208,13 @@ int load_config(const char *filename, struct config *cfg) {
 
                 if (strncmp(name, "IFACE", strnlen(name, BUFSIZE)) == 0) {
                     strncpy(cfg->iface, value, sizeof(cfg->iface));
+                }
+
+                if (strncmp(name, "QUEUE", strnlen(name, BUFSIZE)) == 0) {
+                    int val = strtol(value, &endptr, 10);
+                    if (errno || endptr != value) {
+                        cfg->queue = val;
+                    }
                 }
 
                 if (strncmp(name, "BPF_PROG", strnlen(name, BUFSIZE)) == 0) {

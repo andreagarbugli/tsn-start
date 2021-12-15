@@ -344,10 +344,10 @@ i32 xdp_connection__receive(xdp_socket_t *xdp_sock) {
 	u32 fq_idx = 0;
 	u32 ret = xsk_ring_prod__reserve(&xdp_sock->umem->fill_queue, rcvd, &fq_idx);
 	while (ret != rcvd) {
-		if (ret < 0) {
-			LOG_ERROR("Failed");
-			return -1;
-		}
+		// if (ret < 0) {
+		// 	LOG_ERROR("Failed");
+		// 	return -1;
+		// }
 
 		ret = xsk_ring_prod__reserve(&xdp_sock->umem->fill_queue, rcvd, &fq_idx);
 	}
@@ -477,6 +477,7 @@ int main(int argc, char *argv[]) {
 
 	interface_min_t iface = { .index = if_nametoindex(state.cfg.iface) };
 	memcpy(iface.name, state.cfg.iface, IF_NAMESIZE - 1);
+	iface.queue_id = state.cfg.queue;
 
 	xsk_config_params_t xsk_cfg_params = {
 		.frame_size = DEFAULT_VALUE,
@@ -486,14 +487,24 @@ int main(int argc, char *argv[]) {
 		.number_of_desc_fill_queue = DEFAULT_VALUE,
 		.flags = XSK_CONFIG_FLAGS_TX,
 		.xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST,
-		.xdp_bind_flags = XDP_COPY,
+		.xdp_bind_flags = 0,
 		.need_wakeup = false
 	};
 
-	xsk_cfg_params.xdp_flags |= XDP_FLAGS_SKB_MODE;
-	// xsk_cfg_params.xdp_flags |= XDP_FLAGS_DRV_MODE;
-	// WARN(garbu): zero-copy breaks the fucking system.
-	// xsk_cfg_params.xdp_bind_flags |= XDP_ZEROCOPY;
+	switch (state.cfg.xdp_mode) {
+		case XDP_DRV:
+			xsk_cfg_params.xdp_flags |= XDP_FLAGS_DRV_MODE;
+			xsk_cfg_params.xdp_bind_flags = XDP_COPY;
+			break;
+		case XDP_ZC: // WARN(garbu): zero-copy breaks the fucking system if `igc` driver is used.
+			xsk_cfg_params.xdp_bind_flags |= XDP_ZEROCOPY;
+			break;
+		default: /* XDP_SKB */
+			xsk_cfg_params.xdp_flags |= XDP_FLAGS_SKB_MODE;
+			xsk_cfg_params.xdp_bind_flags = XDP_COPY;
+			break;
+
+	}
 
 	if (state.cfg.mode == RX_MODE_XDP) {
 		xsk_cfg_params.flags = 0;
@@ -509,6 +520,7 @@ int main(int argc, char *argv[]) {
 	if (state.cfg.mode == RX_MODE_XDP) {
 		do_rx(xdp_socket);
 	} else {
+		LOG_INFO("Starting as a TALKER");
 		do_tx(&state, xdp_socket, &xsk_cfg_params);
 	}
 	
