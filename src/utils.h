@@ -7,6 +7,8 @@
 
 u64 get_realtime_ns();
 
+u64 get_time_ns();
+
 void normalize_timespec(struct timespec *ts);
 
 u64 timespec_to_ns(struct timespec *ts);

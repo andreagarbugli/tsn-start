@@ -5,18 +5,25 @@
 #include "logger.h"
 #include "utils.h"
 
-u64 get_realtime_ns() {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-
-    return ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec;
-}
-
 __always_inline u64 timespec_to_ns(struct timespec *ts) {
     return ts->tv_sec * NSEC_PER_SEC + ts->tv_nsec;
 }
 
-void normalize_timespec(struct timespec *ts) {
+__always_inline u64 get_time_ns() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    return timespec_to_ns(&ts);
+}
+
+__always_inline u64 get_realtime_ns() {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    return timespec_to_ns(&ts);
+}
+
+__always_inline void normalize_timespec(struct timespec *ts) {
     while (ts->tv_nsec > 999999999) {
 		ts->tv_sec += 1;
 		ts->tv_nsec -= NSEC_PER_SEC;
@@ -28,12 +35,12 @@ void normalize_timespec(struct timespec *ts) {
 	}
 }
 
-u64 normalize_timestamp_ns(i64 ts, i64 base) {
+__always_inline u64 normalize_timestamp_ns(i64 ts, i64 base) {
     u64 tmp = (u64) (ts / base);
     return tmp * base;
 }
 
-void setup_looping_ts_and_txtime(
+__always_inline void setup_looping_ts_and_txtime(
     struct timespec *ts, u64 *looping_ts,
     u64 *txtime, u64 period, u64 offset
 ) {
@@ -47,7 +54,7 @@ void setup_looping_ts_and_txtime(
     *txtime = *looping_ts + offset;
 }
 
-void update_lopping_and_txtime(
+__always_inline void update_lopping_and_txtime(
     struct timespec *ts, u64 *looping_ts,
     u64 *txtime, u64 period
 ) {

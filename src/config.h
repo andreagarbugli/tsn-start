@@ -29,6 +29,8 @@ struct config {
     bool raw_socket;
     bool hwstamp_enabled;
 
+    u64 time; /* test time in sec */
+
     u8 mode;
     u8 xdp_mode;
     

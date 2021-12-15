@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <unistd.h>
@@ -43,7 +44,7 @@ char *config_filename = "config.cfg";
 
 void closing_handler(int signum) {
     (void)signum;
-    fprintf(stdout, "\nInterrupt Received (use `quit` to exit)\n");
+    // fprintf(stdout, "\nInterrupt Received (use `quit` to exit)\n");
     g_running = false;
 }
 
@@ -334,6 +335,18 @@ i32 xdp_connection__send(xdp_socket_t *xdp_sock, xsk_config_params_t *params, u8
 	return -1;
 }
 
+typedef struct txrx_stats {
+	u64 msg;
+	u64 rx_time;
+	u64 tx_time;
+	u64 jitter;
+	u64 lat;
+} txrx_stats_t;
+
+static size_t g_pkt_count = 0;
+static txrx_stats_t *g_stats;
+static u64 g_period; /* only for tests */
+
 i32 xdp_connection__receive(xdp_socket_t *xdp_sock) {
 	u32 rx_idx = 0;
 	u32 rcvd = xsk_ring_cons__peek(&xdp_sock->rx_ring, 1, &rx_idx);
@@ -363,13 +376,24 @@ i32 xdp_connection__receive(xdp_socket_t *xdp_sock) {
 		}
 
 		u64 rx_timestamp = get_realtime_ns();
+		struct ethhdr *ehdr = (struct ethhdr *)packet;
+		if (ntohs(ehdr->h_proto) != ETH_P_TSN) {
+			continue;
+		}
 		
 		custom_payload_t *payload_ptr = (custom_payload_t*)(packet + ETH_HLEN);
-		// Handle Packet 
+		u64 current_time = get_time_ns();
+		g_stats[g_pkt_count].msg = payload_ptr->seq + 1;
+		g_stats[g_pkt_count].rx_time = current_time;
+		g_stats[g_pkt_count].lat = rx_timestamp - payload_ptr->tx_timestamp;
+		g_stats[g_pkt_count].jitter =  current_time - (g_stats[0].rx_time + g_pkt_count * g_period);
 
-		LOG_INFO("rx: %lld\ttx: %lld\tlat: %lld", 
-				 rx_timestamp, payload_ptr->tx_timestamp,
-				 rx_timestamp - payload_ptr->tx_timestamp);
+		g_pkt_count += 1;
+
+
+		// LOG_INFO("rx: %lld\ttx: %lld\tlat: %lld", 
+		// 		 rx_timestamp, payload_ptr->tx_timestamp,
+		// 		 rx_timestamp - payload_ptr->tx_timestamp);
 
 	}
 
@@ -409,43 +433,77 @@ void xdp_connection__close(xdp_socket_t *xdp_sock,
 }
 
 void do_tx(struct global_state *state, xdp_socket_t *sock, xsk_config_params_t *params) {
-	struct timespec ts;
-    u64 looping_ts = get_realtime_ns() + NSEC_PER_SEC;
+	size_t n_messages = state->cfg.time * (NSEC_PER_SEC / state->cfg.period) * 2;
+	g_stats = calloc(n_messages, sizeof(txrx_stats_t));
+
+	// struct timespec ts;
+    // u64 looping_ts = get_realtime_ns() + NSEC_PER_SEC;
     u64 txtime = 0;
-	u64 period = state->cfg.period;
-	u64 offset = state->cfg.offset;
-    setup_looping_ts_and_txtime(&ts, &looping_ts, &txtime, period, offset);
+	// u64 period = state->cfg.period;
+	// u64 offset = state->cfg.offset;
+    // setup_looping_ts_and_txtime(&ts, &looping_ts, &txtime, period, offset);
 
 	u8 data[64] = {0};
 	u8 *data_ptr = &data[0];
+	u64 current_time = get_time_ns();
+	u64 next_send_time = normalize_timestamp_ns(current_time, NSEC_PER_SEC) + NSEC_PER_SEC;
+
 	// memcpy(data_ptr, "\x3c\xfd\xfe\x9e", 4);
 	custom_payload_t *payload_ptr = (custom_payload_t *)(data_ptr);
 
-	i32 pkt_count = 0;
-	while (1 && pkt_count < state->cfg.offset * 100) {
-		i32 sleep_ret = clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &ts, NULL);
-		if (sleep_ret) {
-			LOG_WARN("Failed to sleep %d: %s", sleep_ret, strerror(sleep_ret));
-			break;
-		}   
+	while (1 && g_pkt_count < n_messages) {
+		while (current_time < next_send_time) {
+			current_time = get_time_ns();
+		};
 
-		payload_ptr->seq = pkt_count;
-		payload_ptr->tx_timestamp = get_realtime_ns();
+		// i32 sleep_ret = clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &ts, NULL);
+		// if (sleep_ret) {
+		// 	LOG_WARN("Failed to sleep %d: %s", sleep_ret, strerror(sleep_ret));
+		// 	break;
+		// }   
 
-		LOG_INFO("tx time: %lld", payload_ptr->tx_timestamp);
+		txtime = get_realtime_ns();
+		payload_ptr->seq = g_pkt_count;
+		payload_ptr->tx_timestamp = txtime;
+
+		g_stats[g_pkt_count].msg = g_pkt_count + 1;
+		g_stats[g_pkt_count].tx_time = current_time;
+		g_stats[g_pkt_count].jitter = current_time - (g_stats[0].tx_time + g_pkt_count * state->cfg.period);
+
 		xdp_connection__send(sock, params, data, sizeof(data));
-		
-		update_lopping_and_txtime(&ts, &looping_ts, &txtime, period);
+	
+		//  update_lopping_and_txtime(&ts, &looping_ts, &txtime, period);
 
-		pkt_count += 1;
+		next_send_time += state->cfg.period;
+		g_pkt_count += 1;
 
 		if (!g_running) {
 			break;
 		}
 	}
+
+	LOG_DEBUG("writing to file");
+	i32 fd = open("./prova", O_CREAT | O_WRONLY | O_TRUNC, S_IWUSR | S_IRUSR);
+	char buf[1024] = {0};
+	txrx_stats_t *stats = NULL;
+	for (size_t i = 0; i < g_pkt_count; i++) {
+		stats = &g_stats[i];
+		snprintf(buf, 1024, "%ld, %ld, %ld\n", 
+				 stats->msg, stats->tx_time, stats->jitter);
+		write(fd, buf, strlen(buf));
+		memset(buf, 0, 1024);
+	}
+
+	close(fd);
+	free(g_stats);
 }
 
-void do_rx(xdp_socket_t *sock) {
+void do_rx(struct global_state *state, xdp_socket_t *sock) {
+	size_t n_messages = state->cfg.time * (NSEC_PER_SEC / state->cfg.period) * 2;
+	g_stats = calloc(n_messages, sizeof(txrx_stats_t));
+
+	g_period = state->cfg.period;
+
 	LOG_INFO("Start receiving packets...");
 	while (1) {
 		(void)xdp_connection__receive(sock);
@@ -454,6 +512,21 @@ void do_rx(xdp_socket_t *sock) {
 			break;
 		}
 	}
+
+	LOG_DEBUG("writing to file");
+	i32 fd = open("./prova", O_CREAT | O_WRONLY | O_TRUNC, S_IWUSR | S_IRUSR);
+	char buf[1024] = {0};
+	txrx_stats_t *stats = NULL;
+	for (size_t i = 0; i < g_pkt_count; i++) {
+		stats = &g_stats[i];
+		snprintf(buf, 1024, "%ld, %ld, %ld, %ld\n", 
+				 stats->msg, stats->rx_time, stats->lat, stats->jitter);
+		write(fd, buf, strlen(buf));
+		memset(buf, 0, 1024);
+	}
+
+	close(fd);
+	free(g_stats);
 }
 
 int main(int argc, char *argv[]) {
@@ -518,7 +591,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	if (state.cfg.mode == RX_MODE_XDP) {
-		do_rx(xdp_socket);
+		do_rx(&state, xdp_socket);
 	} else {
 		LOG_INFO("Starting as a TALKER");
 		do_tx(&state, xdp_socket, &xsk_cfg_params);

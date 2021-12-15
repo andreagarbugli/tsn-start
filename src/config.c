@@ -168,6 +168,13 @@ int load_config(const char *filename, struct config *cfg) {
                     }
                 }
 
+                if (strncmp(name, "TIME", strnlen(name, BUFSIZE)) == 0) {
+                    int val = strtol(value, &endptr, 10);
+                    if (errno || endptr != value) {
+                        cfg->time = val;
+                    }
+                }
+
                 if (strncmp(name, "DEADLINE_MODE", strnlen(name, BUFSIZE)) == 0) {
                     if (strncmp(value, "TRUE", strnlen(value, BUFSIZE)) == 0) {
                         cfg->use_deadline_mode = true;

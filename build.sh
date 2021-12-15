@@ -59,7 +59,7 @@ function compile_user_program() {
 
     SOURCES=$(find src/ -maxdepth 1 -type f -name '*.[c|h]')
     SRCS_COMMANDS=$(find src/commands/ -maxdepth 1 -type f -name '*.[c|h]')
-    GCC_FLAGS="-O2 -Wall -Wextra -Wuninitialized -Wno-stringop-truncation -Wno-sign-compare -Wno-address-of-packed-member"
+    GCC_FLAGS="-O2 -march=native -Wall -Wextra -Wuninitialized -Wno-stringop-truncation -Wno-sign-compare -Wno-address-of-packed-member"
     gcc $GCC_FLAGS $INCLUDES $SOURCES $SRCS_COMMANDS $1.c "$OUTDIR/libbpf/libbpf.a" -lpthread -lelf -lz -DLOG_LEVEL=$LOG_LEVEL -o "$OUTDIR/$1"
     # cp configs/config.cfg $OUTDIR/config.cfg
 
