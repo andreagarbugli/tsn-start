@@ -386,10 +386,8 @@ i32 xdp_connection__receive(xdp_socket_t *xdp_sock) {
 		g_stats[g_pkt_count].msg = payload_ptr->seq + 1;
 		g_stats[g_pkt_count].rx_time = current_time;
 		g_stats[g_pkt_count].lat = rx_timestamp - payload_ptr->tx_timestamp;
-		g_stats[g_pkt_count].jitter =  current_time - (g_stats[0].rx_time + g_pkt_count * g_period);
 
 		g_pkt_count += 1;
-
 
 		// LOG_INFO("rx: %lld\ttx: %lld\tlat: %lld", 
 		// 		 rx_timestamp, payload_ptr->tx_timestamp,
@@ -468,7 +466,6 @@ void do_tx(struct global_state *state, xdp_socket_t *sock, xsk_config_params_t *
 
 		g_stats[g_pkt_count].msg = g_pkt_count + 1;
 		g_stats[g_pkt_count].tx_time = current_time;
-		g_stats[g_pkt_count].jitter = current_time - (g_stats[0].tx_time + g_pkt_count * state->cfg.period);
 
 		xdp_connection__send(sock, params, data, sizeof(data));
 	
@@ -486,8 +483,12 @@ void do_tx(struct global_state *state, xdp_socket_t *sock, xsk_config_params_t *
 	i32 fd = open("./prova", O_CREAT | O_WRONLY | O_TRUNC, S_IWUSR | S_IRUSR);
 	char buf[1024] = {0};
 	txrx_stats_t *stats = NULL;
+	u64 last_tx_time = g_stats[0].tx_time; 
 	for (size_t i = 0; i < g_pkt_count; i++) {
 		stats = &g_stats[i];
+		stats->jitter = stats->tx_time - last_tx_time;
+		last_tx_time = stats->tx_time;
+
 		snprintf(buf, 1024, "%ld, %ld, %ld\n", 
 				 stats->msg, stats->tx_time, stats->jitter);
 		write(fd, buf, strlen(buf));
@@ -517,8 +518,12 @@ void do_rx(struct global_state *state, xdp_socket_t *sock) {
 	i32 fd = open("./prova", O_CREAT | O_WRONLY | O_TRUNC, S_IWUSR | S_IRUSR);
 	char buf[1024] = {0};
 	txrx_stats_t *stats = NULL;
+	u64 last_rx_time = g_stats[0].rx_time; 
 	for (size_t i = 0; i < g_pkt_count; i++) {
 		stats = &g_stats[i];
+		stats->jitter = stats->rx_time - last_rx_time;
+		last_rx_time = stats->rx_time;
+
 		snprintf(buf, 1024, "%ld, %ld, %ld, %ld\n", 
 				 stats->msg, stats->rx_time, stats->lat, stats->jitter);
 		write(fd, buf, strlen(buf));
